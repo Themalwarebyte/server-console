@@ -1,6 +1,6 @@
 import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
-import { Infer, v } from "convex/values";
+import { v } from "convex/values";
 
 // default user roles. can add / remove based on the project as needed
 export const ROLES = {
@@ -14,7 +14,14 @@ export const roleValidator = v.union(
   v.literal(ROLES.USER),
   v.literal(ROLES.MEMBER),
 );
-export type Role = Infer<typeof roleValidator>;
+
+const capability = v.object({
+  code: v.string(),
+  version: v.string(),
+  riskClass: v.string(),
+  supported: v.boolean(),
+  locallyEnabled: v.boolean(),
+});
 
 const schema = defineSchema(
   {
@@ -32,12 +39,150 @@ const schema = defineSchema(
       role: v.optional(roleValidator), // role of the user. do not remove
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
-    // add other tables here
+    /**
+     * Servers: stable managed machines. Immutable `publicId` is the identity,
+     * hostname is metadata only. A server never disappears from history —
+     * retired machines keep their record and their audit trail.
+     */
+    servers: defineTable({
+      publicId: v.string(),
+      displayName: v.string(),
+      hostname: v.string(),
+      lifecycleState: v.string(), // ACTIVE | PENDING_ENROLLMENT | STALE | OFFLINE | QUARANTINED | RETIRED
+      environment: v.string(),
+      region: v.string(),
+      tailscaleName: v.string(),
+      os: v.object({ name: v.string(), kernel: v.string(), arch: v.string() }),
+      hardware: v.object({
+        cores: v.number(),
+        memoryGb: v.number(),
+        diskGb: v.number(),
+        diskUsedGb: v.number(),
+      }),
+      cpuLoad: v.number(),
+      memUsedPct: v.number(),
+      docker: v.object({
+        version: v.string(),
+        running: v.number(),
+        total: v.number(),
+        healthy: v.boolean(),
+      }),
+      agent: v.object({
+        version: v.string(),
+        protocolVersion: v.string(),
+        connected: v.boolean(),
+        lastSeenAt: v.number(),
+        bootId: v.string(),
+      }),
+      identity: v.object({
+        fingerprint: v.string(),
+        certSerial: v.string(),
+        issuedAt: v.number(),
+        certExpiresAt: v.number(),
+      }),
+      capabilities: v.array(capability),
+      enrolledAt: v.number(),
+      note: v.optional(v.string()),
+    }).index("by_public_id", ["publicId"]),
 
-    // tableName: defineTable({
-    //   ...
-    //   // table fields
-    // }).index("by_field", ["field"])
+    /** Observed container inventory. Read-only mirror of runtime state. */
+    containers: defineTable({
+      serverPublicId: v.string(),
+      dockerId: v.string(),
+      name: v.string(),
+      image: v.string(),
+      project: v.string(),
+      state: v.string(), // running | exited | paused | restarting
+      health: v.string(), // healthy | unhealthy | starting | unknown
+      cpuPct: v.number(),
+      memPct: v.number(),
+      restarts: v.number(),
+      ports: v.array(v.string()),
+      startedAt: v.number(),
+      logs: v.array(v.string()),
+    }).index("by_server", ["serverPublicId"]),
+
+    /**
+     * Tasks: requested operations. Every task carries the signed action
+     * envelope fields the agent and helper verify before execution.
+     */
+    tasks: defineTable({
+      taskRef: v.string(),
+      serverPublicId: v.string(),
+      capability: v.string(),
+      containerName: v.optional(v.string()),
+      riskClass: v.string(), // R1 | R2 | R3
+      state: v.string(), // PENDING_APPROVAL | SUCCEEDED | FAILED | REJECTED | CANCELLED | EXPIRED
+      reason: v.string(),
+      requestedBy: v.string(),
+      approver: v.optional(v.string()),
+      nonce: v.string(),
+      envelopeHash: v.string(),
+      signedBy: v.string(),
+      controlEpoch: v.number(),
+      expiresAt: v.number(),
+      resultNote: v.optional(v.string()),
+      replayAttempted: v.optional(v.boolean()),
+    }).index("by_task_ref", ["taskRef"]),
+
+    /**
+     * Audit events: append-only, hash-chained evidence. Each event commits to
+     * the previous event's hash, so rewriting history is detectable.
+     */
+    auditEvents: defineTable({
+      seq: v.number(),
+      ts: v.number(),
+      correlationId: v.string(),
+      taskRef: v.optional(v.string()),
+      actor: v.string(),
+      serverPublicId: v.optional(v.string()),
+      capability: v.optional(v.string()),
+      kind: v.string(), // REQUEST | AUTHORIZATION | APPROVAL | DISPATCH | RECEIPT | EXECUTION | VERIFICATION | COMPLETION | REJECTION | ENROLLMENT | SYSTEM
+      summary: v.string(),
+      riskClass: v.optional(v.string()),
+      prevHash: v.string(),
+      hash: v.string(),
+    }).index("by_seq", ["seq"]),
+
+    /** Communication rules: human-meaningful intent, compiled to agent-owned firewall rules. */
+    commRules: defineTable({
+      ruleRef: v.string(),
+      name: v.string(),
+      sourceServer: v.string(),
+      sourceProject: v.string(),
+      destServer: v.string(),
+      destService: v.string(),
+      proto: v.string(), // tcp | udp
+      port: v.number(),
+      path: v.string(), // tailscale0 | lan
+      status: v.string(), // PENDING_APPROVAL | ACTIVE | REVOKED
+      permanence: v.string(), // PERMANENT | TEMPORARY
+      expiresAt: v.optional(v.number()),
+      verification: v.string(), // VERIFIED | PENDING | FAILED
+      lastVerifiedAt: v.optional(v.number()),
+      createdBy: v.string(),
+      approvedBy: v.optional(v.string()),
+      note: v.string(),
+    }).index("by_rule_ref", ["rule_ref"]),
+
+    /** Enrollment invitations: short-lived, one-time, fingerprint-verified. */
+    enrollments: defineTable({
+      inviteRef: v.string(),
+      hostLabel: v.string(),
+      hostname: v.string(),
+      status: v.string(), // INVITATION_PENDING | AWAITING_APPROVAL | APPROVED | REJECTED
+      csrFingerprint: v.string(),
+      agentVersion: v.string(),
+      createdAt: v.number(),
+      expiresAt: v.number(),
+      note: v.string(),
+    }).index("by_invite_ref", ["invite_ref"]),
+
+    /** Internal markers (seed state, control epoch). */
+    meta: defineTable({
+      key: v.string(),
+      value: v.any(),
+    }).index("by_key", ["key"]),
   },
   {
     schemaValidation: false,
