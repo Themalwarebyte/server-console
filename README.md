@@ -56,6 +56,7 @@ See `docs/DEPLOYMENT.md`.
 | `docs/AUTHENTICATION_PLAN.md` | Approved future auth model (owner-only, MFA-ready) |
 | `docs/AUTHORIZATION_MODEL.md` | Role matrix and deny-by-default function policy |
 | `docs/DEPLOYMENT.md` | SERVER-02 deployment requirements and open questions |
+| `docs/LOCAL_VALIDATION_GUIDE.md` | Run the console against self-hosted Convex locally, step by step |
 | `docs/RECOVERY.md` | Backup/restore and replay-protection design |
 | `docs/MIGRATION_FREEBUFF.md` | Platform decoupling report (before/after) |
 | `docs/STATUS.md` | Current phase ledger |
