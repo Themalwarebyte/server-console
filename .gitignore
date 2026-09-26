@@ -1,4 +1,17 @@
+# Environment files — never commit secrets
+.env
 .env.local
+.env.*.local
+
+# Dependencies
 node_modules
+
+# Build output
 dist
+
+# Convex codegen
 src/convex/_generated
+
+# OS / editor artifacts
+*.log
+.DS_Store
