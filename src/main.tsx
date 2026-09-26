@@ -12,7 +12,12 @@ import "./index.css";
 // Lazy load route components for better code splitting
 const Landing = lazy(() => import("./pages/Landing.tsx"));
 const AuthPage = lazy(() => import("./pages/Auth.tsx"));
-const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
+const Console = lazy(() => import("./pages/Console.tsx"));
+const Servers = lazy(() => import("./pages/Servers.tsx"));
+const ServerDetail = lazy(() => import("./pages/ServerDetail.tsx"));
+const Communication = lazy(() => import("./pages/Communication.tsx"));
+const Tasks = lazy(() => import("./pages/Tasks.tsx"));
+const Enrollment = lazy(() => import("./pages/Enrollment.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Simple loading fallback for route transitions
@@ -122,13 +127,53 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/" element={<Landing />} />
               <Route
                 path="/auth"
-                element={<AuthPage redirectAfterAuth="/dashboard" />}
+                element={<AuthPage redirectAfterAuth="/console" />}
               />
               <Route
-                path="/dashboard"
+                path="/console"
                 element={
                   <RequireAuth>
-                    <Dashboard />
+                    <Console />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/console/servers"
+                element={
+                  <RequireAuth>
+                    <Servers />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/console/servers/:publicId"
+                element={
+                  <RequireAuth>
+                    <ServerDetail />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/console/communication"
+                element={
+                  <RequireAuth>
+                    <Communication />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/console/tasks"
+                element={
+                  <RequireAuth>
+                    <Tasks />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/console/enrollment"
+                element={
+                  <RequireAuth>
+                    <Enrollment />
                   </RequireAuth>
                 }
               />

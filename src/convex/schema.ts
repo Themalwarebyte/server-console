@@ -163,7 +163,7 @@ const schema = defineSchema(
       createdBy: v.string(),
       approvedBy: v.optional(v.string()),
       note: v.string(),
-    }).index("by_rule_ref", ["rule_ref"]),
+    }).index("by_rule_ref", ["ruleRef"]),
 
     /** Enrollment invitations: short-lived, one-time, fingerprint-verified. */
     enrollments: defineTable({
@@ -176,7 +176,7 @@ const schema = defineSchema(
       createdAt: v.number(),
       expiresAt: v.number(),
       note: v.string(),
-    }).index("by_invite_ref", ["invite_ref"]),
+    }).index("by_invite_ref", ["inviteRef"]),
 
     /** Internal markers (seed state, control epoch). */
     meta: defineTable({
