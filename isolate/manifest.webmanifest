@@ -1,11 +1,11 @@
 {
-  "name": "freebuff.com application",
-  "short_name": "freebuff.com",
-  "description": "freebuff.com application",
+  "name": "Server Management Console",
+  "short_name": "SMC",
+  "description": "Private control plane for independent servers.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#000000",
+  "background_color": "#14171c",
+  "theme_color": "#14171c",
   "icons": [
     {
       "src": "/logo.svg",
