@@ -1,6 +1,6 @@
-import { query, mutation, type MutationCtx } from "./_generated/server";
+﻿import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
+import { requireOwner } from "./authz";
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                             */
@@ -84,10 +84,17 @@ async function appendAudit(
   });
 }
 
-async function requireUser(ctx: MutationCtx) {
-  const userId = await getAuthUserId(ctx);
-  if (userId === null) throw new Error("Unauthenticated");
-  return userId;
+/**
+ * Authorization for every sensitive read and write in this module.
+ *
+ * Delegates to the single server-side helper in `authz.ts`, which requires an
+ * authenticated Convex identity belonging to the configured Owner account and
+ * returns the session identity used for audit attribution. There is no
+ * localhost or root bypass.
+ */
+async function requireUser(ctx: MutationCtx | QueryCtx) {
+  const identity = await requireOwner(ctx);
+  return identity.actor;
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,7 +142,7 @@ const CONTAINERS_S2 = [
 export const seed = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const existing = await ctx.db.query("servers").first();
     if (existing) return;
 
@@ -145,12 +152,12 @@ export const seed = mutation({
 
     await ctx.db.insert("servers", {
       publicId: "srv_7f3a91c2e8",
-      displayName: "SERVER-01",
-      hostname: "server-01.lan",
-      lifecycleState: "ACTIVE",
-      environment: "production",
-      region: "rack-a / 10.0.20.11",
-      tailscaleName: "server-01.tailnet.ts.net.",
+        displayName: "SERVER-01",
+        hostname: "gman",
+        lifecycleState: "ACTIVE",
+        environment: "production",
+        region: "rack-a / 10.0.20.11",
+        tailscaleName: "ooflowdesk.tail0ab69b.ts.net.",
       os: { name: "Debian 12 (bookworm)", kernel: "6.1.0-31-amd64", arch: "x86_64" },
       hardware: { cores: 8, memoryGb: 32, diskGb: 1024, diskUsedGb: 412 },
       cpuLoad: 0.42,
@@ -176,12 +183,12 @@ export const seed = mutation({
 
     await ctx.db.insert("servers", {
       publicId: "srv_2b6e40af15",
-      displayName: "SERVER-02",
-      hostname: "server-02.lan",
-      lifecycleState: "ACTIVE",
-      environment: "production",
-      region: "rack-b / 10.0.20.12",
-      tailscaleName: "server-02.tailnet.ts.net.",
+        displayName: "SERVER-02",
+        hostname: "gman-02",
+        lifecycleState: "ACTIVE",
+        environment: "production",
+        region: "rack-b / 10.0.20.12",
+        tailscaleName: "gman-02.tail0ab69b.ts.net.",
       os: { name: "Ubuntu 24.04 LTS", kernel: "6.8.0-49-generic", arch: "x86_64" },
       hardware: { cores: 4, memoryGb: 16, diskGb: 512, diskUsedGb: 188 },
       cpuLoad: 0.31,
@@ -255,8 +262,8 @@ export const seed = mutation({
       permanence: "PERMANENT",
       verification: "VERIFIED",
       lastVerifiedAt: now - 2 * H,
-      createdBy: "Owner",
-      approvedBy: "Owner",
+      createdBy: actor,
+      approvedBy: actor,
       note: "webapp app-api calls platform api-gateway over HTTPS.",
     });
     await ctx.db.insert("commRules", {
@@ -273,17 +280,17 @@ export const seed = mutation({
       permanence: "TEMPORARY",
       expiresAt: now + 6 * H,
       verification: "PENDING",
-      createdBy: "Owner",
+      createdBy: actor,
       note: "Time-boxed scrape during migration; expires on the host.",
     });
 
     // Historical audit trail, chained.
     const events: Array<[string, string, string, string | undefined, string | undefined]> = [
-      ["ENROLLMENT", "Owner", "SERVER-01 identity issued; fingerprint verified out-of-band.", "srv_7f3a91c2e8", undefined],
-      ["ENROLLMENT", "Owner", "SERVER-02 identity issued; invitation consumed, server is ACTIVE.", "srv_2b6e40af15", undefined],
-      ["APPROVAL", "Owner", "Approved restart of media-organizer after library scan hang.", "srv_7f3a91c2e8", "docker.container.restart"],
+      ["ENROLLMENT", actor, "SERVER-01 identity issued; fingerprint verified out-of-band.", "srv_7f3a91c2e8", undefined],
+      ["ENROLLMENT", actor, "SERVER-02 identity issued; invitation consumed, server is ACTIVE.", "srv_2b6e40af15", undefined],
+      ["APPROVAL", actor, "Approved restart of media-organizer after library scan hang.", "srv_7f3a91c2e8", "docker.container.restart"],
       ["COMPLETION", "mgmt-agent/SERVER-01", "Container media-organizer restarted; verification passed.", "srv_7f3a91c2e8", "docker.container.restart"],
-      ["APPROVAL", "Owner", "Approved communication rule rule_c81e4d20 after impact preview.", undefined, "firewall.communication-policy"],
+      ["APPROVAL", actor, "Approved communication rule rule_c81e4d20 after impact preview.", undefined, "firewall.communication-policy"],
       ["VERIFICATION", "mgmt-agent/SERVER-01", "Positive and negative connectivity tests passed for rule_c81e4d20.", "srv_7f3a91c2e8", "firewall.communication-policy"],
       ["REJECTION", "mgmt-helper/SERVER-02", "Replayed task rejected: nonce already present in execution ledger.", "srv_2b6e40af15", "docker.container.restart"],
     ];
@@ -317,6 +324,7 @@ export const seed = mutation({
 export const listServers = query({
   args: {},
   handler: async (ctx) => {
+    await requireOwner(ctx);
     const rows = await ctx.db.query("servers").order("asc").collect();
     return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
   },
@@ -325,6 +333,7 @@ export const listServers = query({
 export const getServer = query({
   args: { publicId: v.string() },
   handler: async (ctx, { publicId }) => {
+    await requireOwner(ctx);
     const all = await ctx.db
       .query("servers")
       .withIndex("by_public_id", (q) => q.eq("publicId", publicId))
@@ -336,6 +345,7 @@ export const getServer = query({
 export const listContainers = query({
   args: { serverPublicId: v.string() },
   handler: async (ctx, { serverPublicId }) => {
+    await requireOwner(ctx);
     const rows = await ctx.db
       .query("containers")
       .withIndex("by_server", (q) => q.eq("serverPublicId", serverPublicId))
@@ -347,6 +357,7 @@ export const listContainers = query({
 export const listTasks = query({
   args: {},
   handler: async (ctx) => {
+    await requireOwner(ctx);
     const rows = await ctx.db.query("tasks").order("desc").collect();
     return rows.slice(0, 100);
   },
@@ -355,6 +366,7 @@ export const listTasks = query({
 export const listAudit = query({
   args: {},
   handler: async (ctx) => {
+    await requireOwner(ctx);
     const rows = await ctx.db.query("auditEvents").order("desc").collect();
     return rows.slice(0, 200);
   },
@@ -362,17 +374,26 @@ export const listAudit = query({
 
 export const listCommRules = query({
   args: {},
-  handler: async (ctx) => ctx.db.query("commRules").order("desc").collect(),
+  handler: async (ctx) => {
+    await requireOwner(ctx);
+    return ctx.db.query("commRules").order("desc").collect();
+  },
 });
 
 export const listEnrollments = query({
   args: {},
-  handler: async (ctx) => ctx.db.query("enrollments").order("desc").collect(),
+  handler: async (ctx) => {
+    await requireOwner(ctx);
+    return ctx.db.query("enrollments").order("desc").collect();
+  },
 });
 
 export const isSeeded = query({
   args: {},
-  handler: async (ctx) => (await ctx.db.query("servers").first()) !== null,
+  handler: async (ctx) => {
+    await requireOwner(ctx);
+    return (await ctx.db.query("servers").first()) !== null;
+  },
 });
 
 /* ------------------------------------------------------------------ */
@@ -382,7 +403,7 @@ export const isSeeded = query({
 export const restartContainer = mutation({
   args: { containerId: v.id("containers") },
   handler: async (ctx, { containerId }) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const container = await ctx.db.get(containerId);
     if (!container) throw new Error("Container not found");
     const serverRows = await ctx.db
@@ -416,8 +437,8 @@ export const restartContainer = mutation({
       riskClass: "R1",
       state: "SUCCEEDED",
       reason: "Operator-initiated restart from console",
-      requestedBy: "Owner",
-      approver: "Owner",
+      requestedBy: actor,
+      approver: actor,
       nonce,
       envelopeHash,
       signedBy: "signer@control-plane",
@@ -435,7 +456,7 @@ export const restartContainer = mutation({
     await appendAudit(ctx, {
       correlationId,
       taskRef,
-      actor: "Owner",
+      actor: actor,
       serverPublicId: server.publicId,
       capability: "docker.container.restart",
       kind: "COMPLETION",
@@ -461,7 +482,7 @@ export const requestCommRule = mutation({
     note: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const ruleRef = ref("rule");
     await ctx.db.insert("commRules", {
       ruleRef,
@@ -478,13 +499,13 @@ export const requestCommRule = mutation({
       expiresAt:
         args.permanence === "TEMPORARY" ? Date.now() + 6 * 60 * 60 * 1000 : undefined,
       verification: "PENDING",
-      createdBy: "Owner",
+      createdBy: actor,
       note: args.note,
     });
     await appendAudit(ctx, {
       correlationId: ref("corr"),
       taskRef: ruleRef,
-      actor: "Owner",
+      actor: actor,
       serverPublicId: args.destServer,
       capability: "firewall.communication-policy",
       kind: "REQUEST",
@@ -498,7 +519,7 @@ export const requestCommRule = mutation({
 export const approveCommRule = mutation({
   args: { ruleId: v.id("commRules") },
   handler: async (ctx, { ruleId }) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const rule = await ctx.db.get(ruleId);
     if (!rule) throw new Error("Rule not found");
     if (rule.status !== "PENDING_APPROVAL") {
@@ -506,14 +527,14 @@ export const approveCommRule = mutation({
     }
     await ctx.db.patch(ruleId, {
       status: "ACTIVE",
-      approvedBy: "Owner",
+      approvedBy: actor,
       verification: "VERIFIED",
       lastVerifiedAt: Date.now(),
     });
     await appendAudit(ctx, {
       correlationId: ref("corr"),
       taskRef: rule.ruleRef,
-      actor: "Owner",
+      actor: actor,
       serverPublicId: rule.destServer,
       capability: "firewall.communication-policy",
       kind: "APPROVAL",
@@ -526,14 +547,14 @@ export const approveCommRule = mutation({
 export const revokeCommRule = mutation({
   args: { ruleId: v.id("commRules") },
   handler: async (ctx, { ruleId }) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const rule = await ctx.db.get(ruleId);
     if (!rule) throw new Error("Rule not found");
     await ctx.db.patch(ruleId, { status: "REVOKED", verification: "VERIFIED", lastVerifiedAt: Date.now() });
     await appendAudit(ctx, {
       correlationId: ref("corr"),
       taskRef: rule.ruleRef,
-      actor: "Owner",
+      actor: actor,
       serverPublicId: rule.destServer,
       capability: "firewall.communication-policy",
       kind: "COMPLETION",
@@ -546,7 +567,7 @@ export const revokeCommRule = mutation({
 export const createEnrollmentInvite = mutation({
   args: { hostLabel: v.string() },
   handler: async (ctx, { hostLabel }) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const inviteRef = ref("inv");
     const csrFingerprint = `SHA256:${Array.from(crypto.getRandomValues(new Uint8Array(8)))
       .map((b) => b.toString(16).padStart(2, "0"))
@@ -564,7 +585,7 @@ export const createEnrollmentInvite = mutation({
     });
     await appendAudit(ctx, {
       correlationId: ref("corr"),
-      actor: "Owner",
+      actor: actor,
       kind: "ENROLLMENT",
       summary: `Enrollment invitation issued for "${hostLabel}"; awaiting fingerprint verification.`,
     });
@@ -575,7 +596,7 @@ export const createEnrollmentInvite = mutation({
 export const approveEnrollment = mutation({
   args: { enrollmentId: v.id("enrollments") },
   handler: async (ctx, { enrollmentId }) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const enrollment = await ctx.db.get(enrollmentId);
     if (!enrollment) throw new Error("Enrollment not found");
     if (enrollment.status !== "AWAITING_APPROVAL") {
@@ -584,7 +605,7 @@ export const approveEnrollment = mutation({
     await ctx.db.patch(enrollmentId, { status: "APPROVED", note: "Certificate issued; invitation consumed." });
     await appendAudit(ctx, {
       correlationId: ref("corr"),
-      actor: "Owner",
+      actor: actor,
       kind: "ENROLLMENT",
       summary: `Enrollment approved for "${enrollment.hostLabel}"; server-specific certificate issued.`,
     });
@@ -594,13 +615,13 @@ export const approveEnrollment = mutation({
 export const rejectEnrollment = mutation({
   args: { enrollmentId: v.id("enrollments") },
   handler: async (ctx, { enrollmentId }) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const enrollment = await ctx.db.get(enrollmentId);
     if (!enrollment) throw new Error("Enrollment not found");
     await ctx.db.patch(enrollmentId, { status: "REJECTED", note: "Invitation rejected and consumed." });
     await appendAudit(ctx, {
       correlationId: ref("corr"),
-      actor: "Owner",
+      actor: actor,
       kind: "ENROLLMENT",
       summary: `Enrollment rejected for "${enrollment.hostLabel}"; invitation consumed.`,
     });
@@ -610,7 +631,7 @@ export const rejectEnrollment = mutation({
 export const simulateReplayAttempt = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const all = await ctx.db.query("tasks").order("desc").collect();
     const target = all[0];
     if (!target) throw new Error("No tasks to replay.");
@@ -630,10 +651,10 @@ export const simulateReplayAttempt = mutation({
 export const runRecoveryDrill = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     await appendAudit(ctx, {
       correlationId: ref("corr"),
-      actor: "Owner",
+      actor: actor,
       kind: "SYSTEM",
       summary:
         "Recovery drill recorded: control plane offline, workloads verified independent, epoch advanced to 2; pre-restoration tasks cancelled.",
@@ -644,6 +665,7 @@ export const runRecoveryDrill = mutation({
 export const listAuditForServer = query({
   args: { serverPublicId: v.string() },
   handler: async (ctx, { serverPublicId }) => {
+    await requireOwner(ctx);
     const rows = await ctx.db.query("auditEvents").order("desc").collect();
     return rows.filter((e) => e.serverPublicId === serverPublicId).slice(0, 20);
   },
@@ -652,7 +674,7 @@ export const listAuditForServer = query({
 export const refreshInventory = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireUser(ctx);
+    const actor = await requireUser(ctx);
     const servers = await ctx.db.query("servers").collect();
     const now = Date.now();
     for (const s of servers) {
@@ -676,7 +698,7 @@ export const refreshInventory = mutation({
     }
     await appendAudit(ctx, {
       correlationId: ref("corr"),
-      actor: "Owner",
+      actor: actor,
       kind: "REQUEST",
       summary: "Requested fresh inventory from all agents; heartbeats and metrics updated.",
     });

@@ -1,23 +1,17 @@
+import { getAuthConfigProvider } from "@convex-dev/better-auth/auth-config";
 import type { AuthConfig } from "convex/server";
 
+/**
+ * Convex JWT provider configuration.
+ *
+ * The resulting provider is `type: "customJwt"` (RS256) — the JWT
+ * authentication model the self-hosted backend accepts. There is deliberately
+ * no `credentials` provider here: the self-hosted backend rejects that type.
+ *
+ * The trust boundary is entirely internal: the issuer is this Convex
+ * deployment itself, verified against the JWKS the component holds. No
+ * external identity provider is involved, and no third-party issuer is trusted.
+ */
 export default {
-  providers: [
-    // Standard Convex Auth provider for this project's own sign-in ("Get
-    // Started" email/guest, see src/convex/auth.ts). The deployment
-    // self-issues JWTs (iss = CONVEX_SITE_URL, no `kid` header) validated
-    // via OIDC discovery at `${domain}/.well-known/openid-configuration`,
-    // served by auth.addHttpRoutes() in convex/http.ts. Do NOT convert this
-    // entry to `type: "customJwt"` — that path rejects tokens without a
-    // `kid` header, so sign-in would silently never confirm and RequireAuth
-    // would loop back to /auth forever.
-    //
-    // The former Freebuff-issued `customJwt` provider (issuer
-    // https://freebuff.com, applicationID "vly-convex") was removed as part
-    // of the platform decoupling. Nothing in the UI ever selected it; it was
-    // an inbound federated-token trust anchor only.
-    {
-      domain: process.env.CONVEX_SITE_URL!,
-      applicationID: "convex",
-    },
-  ],
+  providers: [getAuthConfigProvider()],
 } satisfies AuthConfig;

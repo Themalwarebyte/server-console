@@ -8,15 +8,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  InputOTP,
-  InputOTPGroup,
-  InputOTPSlot,
-} from "@/components/ui/input-otp";
 import { WordmarkMark } from "@/components/console/ui";
 
-import { useAuth } from "@/hooks/use-auth";
-import { ArrowRight, KeyRound, Loader2, UserX } from "lucide-react";
+import { authClient } from "@/lib/auth-client";
+import { ArrowRight, KeyRound, Loader2, ShieldCheck, UserPlus } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
@@ -34,75 +29,78 @@ function resolveRedirectAfterAuth(
   return fallback;
 }
 
+/**
+ * Single-owner password sign-in.
+ *
+ * There is no public registration and no guest/anonymous path. Ordinary
+ * sign-in is the default; first-owner setup sits behind an explicit control so
+ * the screen never has to ask "does an account already exist" — a question
+ * whose answer would disclose whether an arbitrary address is provisioned.
+ *
+ * The single-owner restriction itself is enforced inside the deployment, in the
+ * Better Auth `databaseHooks` in `convex/auth.ts`. Nothing here is trusted.
+ */
 function Auth({ redirectAfterAuth }: AuthProps = {}) {
-  const { isLoading: authLoading, isAuthenticated, signIn } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = resolveRedirectAfterAuth(
     searchParams.get("returnTo"),
     redirectAfterAuth,
   );
-  const [step, setStep] = useState<"signIn" | { email: string }>("signIn");
-  const [otp, setOtp] = useState("");
+
+  const { data, isPending } = authClient.useSession();
+
+  const [isFirstRun, setIsFirstRun] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!authLoading && isAuthenticated) {
+    if (!isPending && data) {
       navigate(redirect);
     }
-  }, [authLoading, isAuthenticated, navigate, redirect]);
+  }, [isPending, data, navigate, redirect]);
 
-  const handleEmailSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
     try {
       const formData = new FormData(event.currentTarget);
-      await signIn("email-otp", formData);
-      setStep({ email: formData.get("email") as string });
-      setIsLoading(false);
-    } catch (error) {
-      console.error("Email sign-in error:", error);
+      const email = String(formData.get("email") ?? "").trim();
+      const password = String(formData.get("password") ?? "");
+      if (password.length === 0) {
+        throw new Error("Enter your password.");
+      }
+
+      if (isFirstRun) {
+        const result = await authClient.signUp.email({
+          email,
+          password,
+          name: "Owner",
+        });
+        if (result.error) {
+          throw new Error(result.error.message ?? "Could not create the Owner account.");
+        }
+      } else {
+        const result = await authClient.signIn.email({ email, password });
+        if (result.error) {
+          throw new Error("Sign-in failed. Check the Owner credentials.");
+        }
+      }
+
+      navigate(redirect);
+    } catch (err) {
       setError(
-        error instanceof Error
-          ? error.message
-          : "Failed to send verification code. Please try again.",
+        err instanceof Error ? err.message : "Authentication failed. Try again.",
       );
       setIsLoading(false);
     }
   };
 
-  const handleOtpSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setIsLoading(true);
-    setError(null);
-    try {
-      const formData = new FormData(event.currentTarget);
-      await signIn("email-otp", formData);
-      navigate(redirect);
-    } catch (error) {
-      console.error("OTP verification error:", error);
-      setError("The verification code you entered is incorrect.");
-      setIsLoading(false);
-      setOtp("");
-    }
-  };
-
-  const handleGuestLogin = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await signIn("anonymous");
-      navigate(redirect);
-    } catch (error) {
-      console.error("Guest login error:", error);
-      setError(
-        `Failed to sign in as guest: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
-      setIsLoading(false);
-    }
-  };
+  const title = isFirstRun ? "Create Owner account" : "Owner sign-in";
+  const description = isFirstRun
+    ? "First run. Choose the Owner password for this control plane."
+    : "Enter the Owner credentials for this control plane.";
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden bg-background">
@@ -118,161 +116,107 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                 Server Management Console
               </h1>
               <p className="mt-1 text-xs text-muted-foreground">
-                Private control plane · access is recorded
+                Private control plane · single-owner access · every session is audited
               </p>
             </div>
           </div>
 
           <Card className="border-border/70 bg-card/90 backdrop-blur card-layer">
-            {step === "signIn" ? (
-              <>
-                <CardHeader className="text-center">
-                  <CardTitle className="text-base">Operator sign-in</CardTitle>
-                  <CardDescription>
-                    Enter your email to receive a one-time access code
-                  </CardDescription>
-                </CardHeader>
-                <form onSubmit={handleEmailSubmit}>
-                  <CardContent>
-                    <div className="relative flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <KeyRound className="absolute left-3 top-3 size-4 text-muted-foreground" />
-                        <Input
-                          name="email"
-                          placeholder="operator@internal"
-                          type="email"
-                          className="pl-9"
-                          disabled={isLoading}
-                          required
-                        />
-                      </div>
-                      <Button
-                        type="submit"
-                        variant="outline"
-                        size="icon"
-                        disabled={isLoading}
-                      >
-                        {isLoading ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <ArrowRight className="size-4" />
-                        )}
-                      </Button>
-                    </div>
-                    {error && (
-                      <p className="mt-2 text-sm text-rose-400">{error}</p>
-                    )}
+            <CardHeader className="text-center">
+              <CardTitle className="text-base">{title}</CardTitle>
+              <CardDescription>{description}</CardDescription>
+            </CardHeader>
 
-                    <div className="mt-5">
-                      <div className="relative flex items-center">
-                        <span className="w-full border-t border-border/70" />
-                      </div>
+            <form onSubmit={handleSubmit}>
+              <CardContent className="space-y-3">
+                <div className="relative">
+                  <KeyRound className="absolute left-3 top-3 size-4 text-muted-foreground" />
+                  <Input
+                    name="email"
+                    placeholder="owner@server-console.invalid"
+                    type="email"
+                    autoComplete="username"
+                    className="pl-9"
+                    disabled={isLoading}
+                    required
+                  />
+                </div>
 
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="mt-4 w-full"
-                        onClick={handleGuestLogin}
-                        disabled={isLoading}
-                      >
-                        <UserX className="mr-2 size-4" />
-                        Continue as guest operator
-                      </Button>
-                    </div>
-                  </CardContent>
-                </form>
-              </>
-            ) : (
-              <>
-                <CardHeader className="mt-4 text-center">
-                  <CardTitle className="text-base">Check your inbox</CardTitle>
-                  <CardDescription>
-                    We sent a six-digit code to {step.email}
-                  </CardDescription>
-                </CardHeader>
-                <form onSubmit={handleOtpSubmit}>
-                  <CardContent className="pb-4">
-                    <input type="hidden" name="email" value={step.email} />
-                    <input type="hidden" name="code" value={otp} />
+                <Input
+                  name="password"
+                  type="password"
+                  autoComplete={isFirstRun ? "new-password" : "current-password"}
+                  placeholder={isFirstRun ? "Choose a strong password" : "Password"}
+                  disabled={isLoading}
+                  required
+                />
 
-                    <div className="flex justify-center">
-                      <InputOTP
-                        value={otp}
-                        onChange={setOtp}
-                        maxLength={6}
-                        disabled={isLoading}
-                        onKeyDown={(e) => {
-                          if (
-                            e.key === "Enter" &&
-                            otp.length === 6 &&
-                            !isLoading
-                          ) {
-                            const form = (e.target as HTMLElement).closest(
-                              "form",
-                            );
-                            if (form) {
-                              form.requestSubmit();
-                            }
-                          }
-                        }}
-                      >
-                        <InputOTPGroup>
-                          {Array.from({ length: 6 }).map((_, index) => (
-                            <InputOTPSlot key={index} index={index} />
-                          ))}
-                        </InputOTPGroup>
-                      </InputOTP>
-                    </div>
-                    {error && (
-                      <p className="mt-2 text-center text-sm text-rose-400">
-                        {error}
-                      </p>
-                    )}
-                    <p className="mt-4 text-center text-sm text-muted-foreground">
-                      Didn't receive a code?{" "}
-                      <Button
-                        variant="link"
-                        className="h-auto p-0"
-                        onClick={() => setStep("signIn")}
-                      >
-                        Try again
-                      </Button>
-                    </p>
-                  </CardContent>
-                  <CardFooter className="flex-col gap-2">
-                    <Button
-                      type="submit"
-                      className="w-full"
-                      disabled={isLoading || otp.length !== 6}
-                    >
-                      {isLoading ? (
-                        <>
-                          <Loader2 className="mr-2 size-4 animate-spin" />
-                          Verifying…
-                        </>
-                      ) : (
-                        <>
-                          Verify code
-                          <ArrowRight className="ml-2 size-4" />
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => setStep("signIn")}
-                      disabled={isLoading}
-                      className="w-full"
-                    >
-                      Use different email
-                    </Button>
-                  </CardFooter>
-                </form>
-              </>
-            )}
+                {isFirstRun && (
+                  <p className="text-[11px] leading-4 text-muted-foreground">
+                    At least 16 characters, with upper and lower case letters, a
+                    digit and a symbol. Only the configured Owner address may
+                    create an account.
+                  </p>
+                )}
 
-            <div className="rounded-b-lg border-t border-border/60 bg-background/60 px-6 py-3 text-center text-[11px] text-muted-foreground">
-              Connections are private-network only · every session is audited
+                {error && (
+                  <p className="text-sm text-rose-400" role="alert">
+                    {error}
+                  </p>
+                )}
+              </CardContent>
+
+              <CardFooter className="flex-col gap-2">
+                <Button type="submit" className="w-full" disabled={isLoading || isPending}>
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      {isFirstRun ? "Creating…" : "Signing in…"}
+                    </>
+                  ) : isFirstRun ? (
+                    <>
+                      <UserPlus className="mr-2 size-4" />
+                      Create Owner account
+                    </>
+                  ) : (
+                    <>
+                      Sign in
+                      <ArrowRight className="ml-2 size-4" />
+                    </>
+                  )}
+                </Button>
+
+                {!isFirstRun && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsFirstRun(true);
+                      setError(null);
+                    }}
+                    className="text-[11px] text-muted-foreground underline-offset-4 hover:underline"
+                  >
+                    First run? Create the Owner account
+                  </button>
+                )}
+
+                {isFirstRun && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsFirstRun(false);
+                      setError(null);
+                    }}
+                    className="text-[11px] text-muted-foreground underline-offset-4 hover:underline"
+                  >
+                    Back to sign in
+                  </button>
+                )}
+              </CardFooter>
+            </form>
+
+            <div className="flex items-center justify-center gap-1.5 rounded-b-lg border-t border-border/60 bg-background/60 px-6 py-3 text-center text-[11px] text-muted-foreground">
+              <ShieldCheck className="size-3" />
+              Single-owner access · no guest sign-in
             </div>
           </Card>
 

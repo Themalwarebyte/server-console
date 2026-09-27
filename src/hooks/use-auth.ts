@@ -1,20 +1,21 @@
-import { api } from "@/convex/_generated/api";
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth, useQuery } from "convex/react";
+import { authClient } from "@/lib/auth-client";
 
+/**
+ * Better Auth session state for the console.
+ *
+ * Presentation only. This hook decides what to render; it is never a security
+ * boundary. Every protected query and mutation re-validates the session
+ * server-side through `requireOwner()` in `convex/authz.ts`.
+ */
 export function useAuth() {
-  const { isLoading: isAuthLoading, isAuthenticated } = useConvexAuth();
-  const user = useQuery(api.users.currentUser);
-  const { signIn, signOut } = useAuthActions();
-
-  // Derive isLoading directly from the dependencies instead of managing separate state
-  const isLoading = isAuthLoading || user === undefined;
+  const { data, isPending } = authClient.useSession();
 
   return {
-    isLoading,
-    isAuthenticated,
-    user,
-    signIn,
-    signOut,
+    isLoading: isPending,
+    isAuthenticated: data != null,
+    user: data?.user ?? null,
+    session: data ?? null,
+    signOut: () => authClient.signOut(),
+    authClient,
   };
 }
