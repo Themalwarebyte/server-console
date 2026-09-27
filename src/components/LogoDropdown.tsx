@@ -10,19 +10,21 @@ import {
 } from "@/components/ui/dropdown-menu";
 import logo from "@/assets/logo.svg";
 import { useAuth } from "@/hooks/use-auth";
+import { signOutAndReload } from "@/lib/sign-out";
+import { toast } from "sonner";
 import { Home, LogOut } from "lucide-react";
 import { useNavigate } from "react-router";
 
 export function LogoDropdown() {
-  const { isAuthenticated, signOut } = useAuth();
+  const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
+  // Centralised sign-out: invalidates the session, then forces a full-document
+  // navigation so the cached Convex client is destroyed. See lib/sign-out.ts.
   const handleSignOut = async () => {
-    try {
-      await signOut();
-      navigate("/");
-    } catch (error) {
-      console.error("Sign out error:", error);
+    const { ok } = await signOutAndReload();
+    if (!ok) {
+      toast.error("Sign out failed. Please try again.");
     }
   };
 

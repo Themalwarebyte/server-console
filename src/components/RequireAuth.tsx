@@ -1,6 +1,8 @@
 import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
 import { useAuth } from "@/hooks/use-auth";
-import { useEffect, type ReactNode } from "react";
+import { signOutAndReload } from "@/lib/sign-out";
+import { toast } from "sonner";
+import { useEffect, useState, type ReactNode } from "react";
 
 /**
  * Gate for every protected console surface.
@@ -22,6 +24,20 @@ import { useEffect, type ReactNode } from "react";
  */
 
 function ConvexAuthFailure() {
+  const [signingOut, setSigningOut] = useState(false);
+
+  // The single sign-out path. It invalidates the Better Auth session and then
+  // forces a full-document navigation, so the cached Convex client is destroyed
+  // and rebuilt rather than left holding authenticated state.
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    const { ok } = await signOutAndReload();
+    if (!ok) {
+      setSigningOut(false);
+      toast.error("Sign out failed. Please try again.");
+    }
+  };
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm space-y-4 rounded-xl border border-border/70 bg-card/80 p-6 text-center card-layer">
@@ -41,18 +57,18 @@ function ConvexAuthFailure() {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+            disabled={signingOut}
+            className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
           >
             Retry authentication
           </button>
           <button
             type="button"
-            onClick={() => {
-              window.location.href = "/auth";
-            }}
-            className="w-full rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground"
+            onClick={handleSignOut}
+            disabled={signingOut}
+            className="w-full rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground disabled:opacity-60"
           >
-            Sign out
+            {signingOut ? "Signing out…" : "Sign out"}
           </button>
         </div>
       </div>
@@ -64,10 +80,11 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   const { isLoading: baLoading, isAuthenticated: baAuthenticated } = useAuth();
 
   // No Better Auth session at all: send the visitor to sign-in rather than
-  // showing an authentication failure they cannot act on.
+  // showing an authentication failure they cannot act on. This is a plain
+  // navigation because there is no authenticated state to tear down.
   useEffect(() => {
     if (!baLoading && !baAuthenticated) {
-      window.location.href = "/auth";
+      window.location.replace("/auth");
     }
   }, [baLoading, baAuthenticated]);
 

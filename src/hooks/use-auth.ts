@@ -15,7 +15,11 @@ export function useAuth() {
     isAuthenticated: data != null,
     user: data?.user ?? null,
     session: data ?? null,
-    signOut: () => authClient.signOut(),
+    // Sign-out is deliberately NOT exposed here. It must go through
+    // `signOutAndReload()` in lib/sign-out.ts, which also forces a
+    // full-document navigation so the cached Convex client is destroyed.
+    // Exposing a bare `authClient.signOut()` invites call sites that skip that
+    // step, which is the bug this replaced.
     authClient,
   };
 }

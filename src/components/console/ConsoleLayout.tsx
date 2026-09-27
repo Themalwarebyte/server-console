@@ -1,6 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { Wordmark, Dot, Mono } from "@/components/console/ui";
 import { useAuth } from "@/hooks/use-auth";
+import { signOutAndReload } from "@/lib/sign-out";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   Activity,
@@ -23,9 +25,18 @@ const NAV = [
 ] as const;
 
 export function ConsoleLayout({ children }: { children: ReactNode }) {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+
+  // Centralised sign-out: invalidates the session, then forces a full-document
+  // navigation so the cached Convex client is destroyed. See lib/sign-out.ts.
+  const handleSignOut = async () => {
+    const { ok } = await signOutAndReload();
+    if (!ok) {
+      toast.error("Sign out failed. Please try again.");
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -59,7 +70,7 @@ export function ConsoleLayout({ children }: { children: ReactNode }) {
               variant="outline"
               size="sm"
               onClick={() => {
-                void signOut().then(() => navigate("/"));
+                void handleSignOut();
               }}
             >
               Sign out

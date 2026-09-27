@@ -1,4 +1,6 @@
-import React from "react";
+﻿import React from "react";
+import { signOutAndReload } from "@/lib/sign-out";
+import { toast } from "sonner";
 import { ConsoleLayout } from "@/components/console/ConsoleLayout";
 import {
   Card,
@@ -59,8 +61,11 @@ export class ConsoleErrorBoundary extends React.Component<
     window.location.reload();
   };
 
-  private handleSignOut = () => {
-    window.location.href = "/auth";
+  private handleSignOut = async () => {
+    const { ok } = await signOutAndReload();
+    if (!ok) {
+      toast.error("Sign out failed. Please try again.");
+    }
   };
 
   render() {
