@@ -1,4 +1,4 @@
-import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { authClient } from "@/lib/auth-client";
 
 /**
@@ -180,12 +180,30 @@ export function useAuthFromBetterAuth(): {
     [],
   );
 
-  return {
-    isLoading: isPending,
-    // Deliberately NOT keyed on the token: the Convex client is the source of
-    // truth for whether the server accepted a token. Reporting a Better Auth
-    // session here would mount protected components before Convex agreed.
-    isAuthenticated: false,
-    fetchAccessToken,
-  };
+  // `isAuthenticated` describes the EXTERNAL AUTH PROVIDER state, nothing else.
+  //
+  // This must reflect whether Better Auth currently has an authenticated
+  // session. `ConvexProviderWithAuth` uses it to decide whether authentication
+  // should be configured and whether `fetchAccessToken` should ever be called.
+  // Reporting a hardcoded `false` here therefore deadlocks the handshake:
+  //
+  //   Better Auth authenticated -> bridge says false -> provider never fetches a
+  //   token -> Convex never authenticates -> protected content never mounts.
+  //
+  // It is deliberately NOT derived from Convex auth state, from the
+  // <Authenticated> component, from `requireOwner()`, or from token
+  // verification. Server-confirmed Convex auth is a separate downstream
+  // concern, surfaced by `useConvexAuth()` / <Authenticated> / <Unauthenticated>.
+  const isAuthenticated = data?.user != null;
+
+  return useMemo(
+    () => ({
+      isLoading: isPending,
+      isAuthenticated,
+      fetchAccessToken,
+    }),
+    // `isPending` / `isAuthenticated` must stay reactive; `fetchAccessToken`
+    // keeps its stable identity so the provider does not churn.
+    [isPending, isAuthenticated, fetchAccessToken],
+  );
 }
