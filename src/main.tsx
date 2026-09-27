@@ -1,12 +1,11 @@
 ﻿import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { ConsoleErrorBoundary } from "@/components/ConsoleErrorBoundary";
-import { ConvexBetterAuthProvider } from "@convex-dev/better-auth/react";
-import { ConvexReactClient } from "convex/react";
+import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router";
-import { authClient } from "@/lib/auth-client";
+import { useAuthFromBetterAuth } from "@/lib/convex-auth-bridge";
 import "./index.css";
 
 /**
@@ -107,38 +106,7 @@ class RootErrorBoundary extends React.Component<
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <RootErrorBoundary>
-      <ConvexBetterAuthProvider
-        client={convex}
-        authClient={
-          /*
-           * UPSTREAM TYPE COMPATIBILITY WORKAROUND — one boundary, one cast.
-           *
-           * `ConvexBetterAuthProvider` declares its `authClient` prop as
-           *   ReturnType<typeof createAuthClient<BetterAuthClientPlugin & { plugins }>>
-           * which requires the base client option to itself be a
-           * BetterAuthClientPlugin. A normal `createAuthClient({ baseURL, plugins })`
-           * can never satisfy that shape, so the natural client fails to typecheck
-           * even though it is exactly the client the official React/Vite guide
-           * constructs.
-           *
-           * Versions: @convex-dev/better-auth 0.12.5, better-auth 1.6.33.
-           * Upstream issues: #393, #420.
-           *
-           * This reconciles a defective type declaration only. It bypasses no
-           * authentication or authorization check: all authorization is enforced
-           * server-side in `src/convex/authz.ts` via `requireOwner()`.
-           *
-           * `authClient` keeps its real inferred type everywhere else in the app;
-           * this assertion is confined to this single prop and is not repeated
-           * anywhere.
-           *
-           * REMOVE this assertion once the upstream types are fixed.
-           */
-          authClient as unknown as React.ComponentProps<
-            typeof ConvexBetterAuthProvider
-          >["authClient"]
-        }
-      >
+      <ConvexProviderWithAuth client={convex} useAuth={useAuthFromBetterAuth}>
         <BrowserRouter>
           <Suspense fallback={<RouteLoading />}>
             {/* One sanitised boundary for every protected console route, so no
@@ -204,7 +172,7 @@ createRoot(document.getElementById("root")!).render(
           </Suspense>
         </BrowserRouter>
         <Toaster />
-      </ConvexBetterAuthProvider>
+      </ConvexProviderWithAuth>
     </RootErrorBoundary>
   </StrictMode>,
 );

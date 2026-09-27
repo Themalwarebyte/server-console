@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+﻿import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -13,7 +13,7 @@ import { WordmarkMark } from "@/components/console/ui";
 import { authClient } from "@/lib/auth-client";
 import { ArrowRight, KeyRound, Loader2, ShieldCheck, UserPlus } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
 interface AuthProps {
   redirectAfterAuth?: string;
@@ -41,7 +41,6 @@ function resolveRedirectAfterAuth(
  * Better Auth `databaseHooks` in `convex/auth.ts`. Nothing here is trusted.
  */
 function Auth({ redirectAfterAuth }: AuthProps = {}) {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = resolveRedirectAfterAuth(
     searchParams.get("returnTo"),
@@ -56,9 +55,9 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
 
   useEffect(() => {
     if (!isPending && data) {
-      navigate(redirect);
+      window.location.replace(redirect);
     }
-  }, [isPending, data, navigate, redirect]);
+  }, [isPending, data, redirect]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -88,7 +87,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
         }
       }
 
-      navigate(redirect);
+      window.location.replace(redirect);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Authentication failed. Try again.",

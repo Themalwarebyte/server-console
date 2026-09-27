@@ -1,8 +1,80 @@
-import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
+import { Authenticated, AuthLoading, Unauthenticated, useConvexAuth } from "convex/react";
 import { useAuth } from "@/hooks/use-auth";
 import { signOutAndReload } from "@/lib/sign-out";
+import { useTokenDiagnostics } from "@/lib/convex-auth-bridge";
+import { authClient } from "@/lib/auth-client";
 import { toast } from "sonner";
 import { useEffect, useState, type ReactNode } from "react";
+
+/**
+ * TEMPORARY diagnostic panel.
+ *
+ * Safe metadata only. Deliberately never renders the raw JWT, any cookie, a
+ * password, a session token, `BETTER_AUTH_SECRET`, or JWKS key material. JWT
+ * header/claims were decoded locally in memory by the bridge and only the
+ * non-secret fields are shown here.
+ *
+ * REMOVE THIS PANEL BEFORE THE VERSION 0.1 DECLARATION.
+ */
+function AuthDiagnosticsPanel() {
+  const d = useTokenDiagnostics();
+  const convex = useConvexAuth();
+  const { data, isPending } = authClient.useSession();
+
+  const sessionState = isPending
+    ? "pending"
+    : data?.session
+      ? "present"
+      : data
+        ? "absent"
+        : "absent";
+
+  const expired =
+    typeof d.claims.exp === "number" ? d.claims.exp * 1000 <= Date.now() : null;
+
+  const row = (k: string, v: ReactNode) => (
+    <div className="flex justify-between gap-3 font-mono text-[11px]">
+      <span className="text-muted-foreground">{k}</span>
+      <span className="text-right break-all">{v}</span>
+    </div>
+  );
+
+  return (
+    <div className="rounded-lg border border-border/70 bg-background/60 p-3 text-left">
+      <p className="mb-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+        diagnostics (temporary)
+      </p>
+      <div className="space-y-1">
+        {row("Better Auth session", sessionState)}
+        {row("token attempts", d.attempts)}
+        {row("token requested", d.requested ? "yes" : "no")}
+        {row("token status", d.status ?? "n/a")}
+        {row("token success", d.success ? "yes" : "no")}
+        {row("token errored", d.errored ? "yes" : "no")}
+        <div className="my-1 border-t border-border/60" />
+        {row("jwt alg", d.header.alg ?? "n/a")}
+        {row("jwt kid", d.header.kid ?? "n/a")}
+        {row("jwt typ", d.header.typ ?? "n/a")}
+        {row("jwt iss", d.claims.iss ?? "n/a")}
+        {row(
+          "jwt aud",
+          d.claims.aud === undefined
+            ? "n/a"
+            : Array.isArray(d.claims.aud)
+              ? d.claims.aud.join(",")
+              : String(d.claims.aud),
+        )}
+        {row("jwt sub", d.claims.sub ? "present" : "n/a")}
+        {row("jwt exp", d.claims.exp ?? "n/a")}
+        {row("jwt expired", expired === null ? "n/a" : expired ? "yes" : "no")}
+        <div className="my-1 border-t border-border/60" />
+        {row("convex loading", String(convex.isLoading))}
+        {row("convex authenticated", String(convex.isAuthenticated))}
+        {row("convex refreshing", String(convex.isRefreshing))}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Gate for every protected console surface.
@@ -71,6 +143,7 @@ function ConvexAuthFailure() {
             {signingOut ? "Signing out…" : "Sign out"}
           </button>
         </div>
+        <AuthDiagnosticsPanel />
       </div>
     </div>
   );
