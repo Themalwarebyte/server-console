@@ -1,0 +1,202 @@
+syntax = "proto3";
+
+package smc.v1;
+
+option go_package = "github.com/themalwarebyte/server-console/agent/gen/smcv1;smcv1";
+
+// Server Management Console agent control plane, Milestone A.
+//
+// One long-lived, agent-initiated bidirectional gRPC stream per host over mTLS.
+// The gateway never dials an agent.
+//
+// Milestone A uses only the read-only messages. Action, ActionAck and
+// ActionResult are declared so the schema is stable, but the Milestone A
+// capability ceiling denies every action capability, so they are never sent.
+service AgentChannel {
+  // The agent opens the stream and the gateway accepts it only after
+  // verifying the client certificate's identity and revocation state.
+  rpc Connect(stream AgentMessage) returns (stream GatewayMessage);
+}
+
+message AgentMessage {
+  oneof payload {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    HostTelemetry host = 3;
+    DockerTelemetry docker = 4;
+    DockerEvent event = 5;
+    ActionAck ack = 6;
+    ActionResult result = 7;
+  }
+}
+
+message GatewayMessage {
+  oneof payload {
+    HelloAck hello_ack = 1;
+    Ping ping = 2;
+    Action action = 3;
+  }
+}
+
+message Capability {
+  // e.g. host.telemetry.read, docker.telemetry.read
+  string code = 1;
+}
+
+// ---------------------------------------------------------------- agent -> gateway
+
+message Hello {
+  // Mirrors the certificate URI SAN. The gateway uses the CERTIFICATE value as
+  // authoritative and rejects a mismatch; this field is cross-checked only.
+  string server_public_id = 1;
+  string agent_version = 2;
+  string protocol_version = 3;
+  // SHA-256 of the agent's leaf certificate, for operator-visible traceability.
+  string cert_fingerprint = 4;
+  string host_boot_id = 5;
+}
+
+message Heartbeat {
+  int64 observed_at_ms = 1;
+  uint64 seq = 2;
+  int64 uptime_seconds = 3;
+  string boot_id = 4;
+}
+
+message HostTelemetry {
+  int64 observed_at_ms = 1;
+  uint64 seq = 2;
+
+  string server_public_id = 3;
+  string hostname = 4;
+  string os_name = 5;
+  string os_version = 6;
+  string kernel = 7;
+  string arch = 8;
+  string boot_id = 9;
+  int64 uptime_seconds = 10;
+
+  double load_1 = 11;
+  double load_5 = 12;
+  double load_15 = 13;
+  double cpu_percent = 14;
+  uint32 cpu_cores = 15;
+
+  uint64 mem_total_bytes = 16;
+  uint64 mem_available_bytes = 17;
+  uint64 mem_used_bytes = 18;
+
+  repeated Mount disk = 19;
+  repeated string tailscale_ips = 20;
+  repeated string lan_ips = 21;
+
+  string agent_version = 22;
+  string protocol_version = 23;
+}
+
+message Mount {
+  string mount_point = 1;
+  string fstype = 2;
+  uint64 total_bytes = 3;
+  uint64 used_bytes = 4;
+  uint64 avail_bytes = 5;
+  int32 used_percent = 6;
+}
+
+message DockerTelemetry {
+  int64 observed_at_ms = 1;
+  uint64 seq = 2;
+  string server_public_id = 3;
+
+  bool daemon_reachable = 4;
+  string engine_version = 5;
+  string compose_version = 6;
+  string api_version = 7;
+
+  uint32 total = 8;
+  uint32 running = 9;
+  uint32 exited = 10;
+  uint32 restarting = 11;
+  uint32 paused = 12;
+  uint32 unhealthy = 13;
+  uint32 with_healthcheck = 14;
+
+  repeated Container containers = 15;
+}
+
+message Container {
+  string id = 1;
+  string name = 2;
+  string image = 3;
+  string state = 4;
+  // Docker reports whether a HEALTHCHECK is defined. Health is only ever
+  // populated when this is true. Health is never synthesised.
+  bool health_check_present = 6;
+  // "" | starting | healthy | unhealthy
+  string health = 7;
+  string status = 8;
+  double cpu_percent = 9;
+  uint64 memory_bytes = 10;
+  int32 restart_count = 11;
+  repeated string ports = 12;
+  int64 started_at_ms = 13;
+}
+
+message DockerEvent {
+  int64 observed_at_ms = 1;
+  string server_public_id = 2;
+  // e.g. container.state, container.health
+  string kind = 3;
+  string container_id = 4;
+  string container_name = 5;
+  string from_state = 6;
+  string to_state = 7;
+  string from_health = 8;
+  string to_health = 9;
+}
+
+message ActionAck {
+  string task_id = 1;
+  bool accepted = 2;
+  string reason = 3;
+}
+
+message ActionResult {
+  string task_id = 1;
+  // SUCCEEDED | FAILED
+  string state = 2;
+  string evidence = 3;
+  int64 observed_at_ms = 4;
+}
+
+// ---------------------------------------------------------------- gateway -> agent
+
+message HelloAck {
+  string session_id = 1;
+  string protocol_version = 2;
+  int64 server_time_ms = 3;
+  int64 heartbeat_interval_ms = 4;
+  int64 host_telemetry_interval_ms = 5;
+  int64 container_telemetry_interval_ms = 6;
+  // The local ceiling the gateway has applied to this agent.
+  repeated Capability ceiling = 7;
+}
+
+message Ping {
+  int64 sent_at_ms = 1;
+}
+
+message Action {
+  string task_id = 1;
+  string server_public_id = 2;
+  string capability = 3;
+  string target_container_id = 4;
+  string target_container_name = 5;
+  int64 issued_at_ms = 6;
+  int64 expires_at_ms = 7;
+  string nonce = 8;
+  int64 management_epoch = 9;
+  string risk_class = 10;
+  string requested_by = 11;
+  string gateway_signature = 12;
+}

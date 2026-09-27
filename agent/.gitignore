@@ -1,0 +1,16 @@
+# Agent build output. Binaries are produced in the pinned build container and
+# installed onto managed hosts; they are never committed.
+agent/out/
+agent/*.err
+
+# Agent build scratch
+agent/do-build.sh
+agent/Dockerfile.build
+agent/build.sh
+
+# Never commit agent private keys, CSRs, certificates, or service credentials.
+# Keys are generated locally on the host that owns them and never leave it.
+agent/**/*.key
+agent/**/*.pem
+agent/*.csr
+agent/*.crt

@@ -48,8 +48,15 @@ const schema = defineSchema(
       inventorySource: v.optional(v.string()),
       // Epoch ms of the observation. Absent means "not observed".
       lastObservedAt: v.optional(v.number()),
-      // Agent enrolment state. "not_enrolled" in V0.1: there are no agents.
+      // Epoch ms of the most recent agent heartbeat. Liveness is derived from
+      // this, never from the mere existence of a row.
+      lastHeartbeatAt: v.optional(v.number()),
+      // not_enrolled | enrolled | revoked
       agentStatus: v.optional(v.string()),
+      // Identity of the agent certificate this host last presented.
+      certFingerprint: v.optional(v.string()),
+      certSerial: v.optional(v.string()),
+      certRevokedAt: v.optional(v.number()),
       // Host uptime in seconds at the time of the snapshot.
       observedUptimeSeconds: v.optional(v.number()),
       os: v.object({ name: v.string(), kernel: v.string(), arch: v.string() }),
@@ -208,12 +215,45 @@ const schema = defineSchema(
       note: v.string(),
     }).index("by_invite_ref", ["inviteRef"]),
 
-    /** Internal markers (seed state, control epoch). */
-    meta: defineTable({
-      key: v.string(),
-      value: v.any(),
-    }).index("by_key", ["key"]),
-  },
+      /** Internal markers (seed state, control epoch). */
+      meta: defineTable({
+        key: v.string(),
+        value: v.any(),
+      }).index("by_key", ["key"]),
+
+      /**
+       * Agent telemetry, written only by the authenticated gateway ingest.
+       *
+       * Every row carries the certificate fingerprint and serial that produced
+       * it, so any figure shown in the console can be traced to a specific
+       * agent certificate. There is no other write path.
+       */
+      agentTelemetry: defineTable({
+        serverPublicId: v.string(),
+        kind: v.string(), // host | docker | event
+        observedAtMs: v.number(),
+        receivedAtMs: v.number(),
+        certFingerprint: v.string(),
+        certSerial: v.string(),
+        gatewayServiceId: v.string(),
+        payload: v.any(),
+      })
+        .index("by_server_kind", ["serverPublicId", "kind"])
+        .index("by_server", ["serverPublicId"]),
+
+      /** Lifecycle events observed by an agent, kept separate from samples. */
+      agentEvents: defineTable({
+        serverPublicId: v.string(),
+        observedAtMs: v.number(),
+        kind: v.string(),
+        containerId: v.optional(v.string()),
+        containerName: v.optional(v.string()),
+        fromState: v.optional(v.string()),
+        toState: v.optional(v.string()),
+        fromHealth: v.optional(v.string()),
+        toHealth: v.optional(v.string()),
+      }).index("by_server", ["serverPublicId"]),
+    },
   {
     schemaValidation: false,
   },

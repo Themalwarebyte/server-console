@@ -1,14 +1,17 @@
 import { httpRouter } from "convex/server";
 import { authComponent, createAuth } from "./auth";
+import { registerAgentRoutes } from "./agentIngest";
 
 /**
- * Better Auth HTTP routes.
+ * HTTP surface.
  *
- * `registerRoutesLazy` mounts the Better Auth handler under the component's
- * own path on the HTTP-actions port. CORS is restricted to the single approved
- * console origin — no wildcards, and never the LAN address.
+ * Better Auth is mounted lazily under /api/auth by the component. The agent
+ * gateway's narrow ingest endpoint is mounted at /api/smc/ingest and is
+ * protected by a dedicated service credential compared in constant time.
  */
 const http = httpRouter();
+
+registerAgentRoutes(http);
 
 authComponent.registerRoutesLazy(http, createAuth, {
   cors: {
