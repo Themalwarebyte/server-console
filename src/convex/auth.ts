@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { createClient, type GenericCtx } from "@convex-dev/better-auth";
 import { convex, crossDomain } from "@convex-dev/better-auth/plugins";
+import { internalAction } from "./_generated/server";
 import { components } from "./_generated/api";
 import type { DataModel } from "./_generated/dataModel";
 import authConfig from "./auth.config";
@@ -81,16 +82,40 @@ export const createAuth = (ctx: GenericCtx<DataModel>) =>
       },
     },
 
-    // `jwks` must be supplied to BOTH the auth config and this plugin. When a
-    // static JWKS is present in the auth config but absent here, the deployment
-    // throws at runtime:
-    //   "Static JWKS detected in auth config, but missing from Convex plugin"
-    // Supplying it here also stops the plugin reading the JWKS from the
-    // database on every token request.
+    // `jwks` must be supplied to BOTH the auth config and this plugin, and it
+    // must be the COMPLETE document from `auth:getStaticJwks` — including the
+    // encrypted signing material. With a public-only JWKS the plugin has no
+    // usable signing key and `/api/auth/convex/token` returns HTTP 500. With no
+    // `jwks` at all, the plugin falls back to the database.
     plugins: [
-      convex({ authConfig, jwks: process.env.BETTER_AUTH_JWKS }),
+      convex({ authConfig, jwks: process.env.JWKS }),
       crossDomain({ siteUrl: SITE_URL }),
     ],
   });
 
 export type Auth = ReturnType<typeof createAuth>;
+
+/**
+ * Returns the full static JWKS document for the `JWKS` deployment variable.
+ *
+ * This is the official @convex-dev/better-auth static-JWKS workflow. The value
+ * it returns contains ENCRYPTED SIGNING MATERIAL, so it is secret
+ * configuration: it belongs in the Convex deployment environment only, never in
+ * Git, never in a VITE_ variable, and never in the browser.
+ *
+ * This is emphatically NOT the public JWKS served at
+ * `/api/auth/convex/jwks`, which is public verification material only.
+ *
+ * It is an internal action, so it cannot be invoked from the public API — only
+ * by an operator with deployment admin credentials, deliberately.
+ */
+export const getStaticJwks = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const auth = createAuth(ctx);
+    // `/convex/latest-jwks` is declared SERVER_ONLY by the plugin and is
+    // therefore unreachable over HTTP; calling the endpoint directly through
+    // the Better Auth instance is the supported way to retrieve it.
+    return auth.api.getLatestJwks();
+  },
+});
