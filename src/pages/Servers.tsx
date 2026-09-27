@@ -71,7 +71,10 @@ export default function Servers() {
                       </div>
                       <div className="flex justify-between">
                         <span>Agent</span>
-                        <Mono className="text-foreground/80">{s.agent.version} · {s.agent.protocolVersion}</Mono>
+                        {/* No agent is enrolled in V0.1. */}
+                        <Mono className="text-foreground/80">
+                          {s.agent ? `${s.agent.version} · ${s.agent.protocolVersion}` : "Not enrolled"}
+                        </Mono>
                       </div>
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -93,7 +96,12 @@ export default function Servers() {
                     <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                       <ShieldCheck className="size-3.5 text-emerald-400" />
                       {s.capabilities.filter((c) => c.locallyEnabled && c.supported).length} capabilities enabled locally
-                      · identity fingerprint {s.identity.fingerprint.slice(0, 13)}…
+                      {/* No agent is enrolled, so no capability ceiling and no
+                          identity have been negotiated. */}
+                      {" · capability ceiling: not negotiated · "}
+                      {s.identity
+                        ? `identity fingerprint ${s.identity.fingerprint.slice(0, 13)}…`
+                        : "identity: not issued"}
                     </div>
                   </CardContent>
                 </Card>

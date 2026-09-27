@@ -1,4 +1,4 @@
-import {
+﻿import {
   Dot,
   LifecycleBadge,
   LogsDialog,
@@ -108,7 +108,6 @@ export default function ServerDetail() {
   }
 
   const diskPct = (server.hardware.diskUsedGb / server.hardware.diskGb) * 100;
-  const expDays = Math.round((server.identity.certExpiresAt - Date.now()) / 86_400_000);
 
   const doRestart = (c: Doc<"containers">) => {
     setBusy(c._id);
@@ -133,8 +132,15 @@ export default function ServerDetail() {
             <h1 className="text-2xl font-semibold tracking-tight">{server.displayName}</h1>
             <LifecycleBadge state={server.lifecycleState} />
             <Badge variant="outline" className="border-border bg-card text-[11px] text-muted-foreground">
-              <Dot tone={server.agent.connected ? "ok" : "idle"} pulse={server.agent.connected} />
-              <span className="ml-1.5">agent {server.agent.connected ? "connected" : "offline"}</span>
+              {/* No agent is enrolled in V0.1 — this is a real state, not a
+                  missing measurement, so it is never shown as "connected". */}
+              <Dot tone={server.agent?.connected ? "ok" : "idle"} pulse={server.agent?.connected} />
+              <span className="ml-1.5">
+                agent {server.agent?.connected ? "connected" : "not enrolled"}
+              </span>
+            </Badge>
+            <Badge variant="outline" className="border-border bg-card text-[11px] text-muted-foreground">
+              source: {server.inventorySource === "operator_snapshot" ? "operator snapshot" : (server.inventorySource ?? "demo")}
             </Badge>
           </div>
           <p className="mt-2 text-sm text-muted-foreground">
@@ -213,17 +219,25 @@ export default function ServerDetail() {
             <CardContent className="space-y-2.5 text-[12px]">
               {[
                 ["Server ID", server.publicId],
-                ["Hostname (metadata)", server.hostname],
-                ["Key fingerprint", server.identity.fingerprint],
-                ["Certificate serial", server.identity.certSerial],
-                ["Certificate expires", `${expDays} days`],
+                ["Hostname", server.hostname],
+                [
+                  "Last observed",
+                  server.lastObservedAt
+                    ? `${new Date(server.lastObservedAt).toISOString().replace("T", " ").slice(0, 19)} UTC`
+                    : "Not observed",
+                ],
+                ["Source", server.inventorySource === "operator_snapshot" ? "Operator snapshot" : (server.inventorySource ?? "demo")],
+                // No agent is enrolled, so no mTLS material has ever been
+                // issued. Report that plainly instead of a placeholder.
+                ["Key fingerprint", server.identity?.fingerprint ?? "Not issued"],
+                ["Certificate serial", server.identity?.certSerial ?? "Not issued"],
+                ["Certificate expires", server.identity ? "Issued" : "Not issued"],
+                ["mTLS", server.identity ? "Configured" : "Not configured"],
                 ["Tailscale", server.tailscaleName],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-baseline justify-between gap-4 border-b border-border/40 pb-2 last:border-0">
                   <span className="shrink-0 text-muted-foreground">{k}</span>
-                  <Mono className={cn("truncate text-right", expDays < 15 && k === "Certificate expires" && "text-amber-300")}>
-                    {v}
-                  </Mono>
+                  <Mono className="truncate text-right">{v}</Mono>
                 </div>
               ))}
             </CardContent>
@@ -240,10 +254,27 @@ export default function ServerDetail() {
               {[
                 ["Operating system", server.os.name],
                 ["Kernel", server.os.kernel],
-                ["Agent version", server.agent.version],
-                ["Protocol", server.agent.protocolVersion],
-                ["Last heartbeat", relative(server.agent.lastSeenAt)],
-                ["Boot ID", server.agent.bootId],
+                ["Architecture", server.os.arch],
+                ["Cores", `${server.hardware.cores}`],
+                [
+                  "Uptime at observation",
+                  server.observedUptimeSeconds
+                    ? relative(Date.now() - server.observedUptimeSeconds)
+                    : "Not observed",
+                ],
+                ["CPU load", server.cpuLoad.toFixed(2)],
+                // Agent-dependent fields. No agent is enrolled in V0.1, so these
+                // report the absence rather than a placeholder.
+                ["Agent", server.agent ? server.agent.version : "Not enrolled"],
+                ["Protocol", server.agent?.protocolVersion ?? "Not negotiated"],
+                [
+                  "Last heartbeat",
+                  server.agent?.lastSeenAt
+                    ? relative(server.agent.lastSeenAt)
+                    : "Not available until agent enrollment",
+                ],
+                ["Boot ID", server.agent?.bootId ?? "Not enrolled"],
+                ["Capability ceiling", "Not negotiated"],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-baseline justify-between gap-4 border-b border-border/40 pb-2 last:border-0">
                   <span className="shrink-0 text-muted-foreground">{k}</span>
@@ -330,13 +361,33 @@ export default function ServerDetail() {
                   <TableRow key={c._id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Dot tone={c.state === "running" ? (c.health === "healthy" ? "ok" : c.health === "unhealthy" ? "bad" : "warn") : "idle"} />
+                        {/* No HEALTHCHECK is never shown as healthy. */}
+                        <Dot
+                          tone={
+                            c.state !== "running"
+                              ? "idle"
+                              : !c.healthcheckPresent
+                                ? "warn"
+                                : c.health === "healthy"
+                                  ? "ok"
+                                  : c.health === "unhealthy"
+                                    ? "bad"
+                                    : "warn"
+                          }
+                        />
                         <Mono className="text-foreground/90">{c.name}</Mono>
                       </div>
                       <div className="mt-0.5 text-[11px] text-muted-foreground">
-                        project {c.project} · {c.cpuPct.toFixed(1)}% cpu · {c.memPct.toFixed(1)}% mem
-                        {c.restarts > 0 ? ` · ${c.restarts} restarts` : ""}
+                        {c.project} · {c.state} ·{" "}
+                        {c.healthcheckPresent
+                          ? `health: ${c.health ?? "unknown"}`
+                          : "No health check"}
                       </div>
+                      {c.dockerStatus && (
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">
+                          {c.dockerStatus}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="hidden max-w-72">
                       <Mono className="block truncate text-muted-foreground">{c.image}</Mono>
@@ -399,7 +450,7 @@ export default function ServerDetail() {
         <LogsDialog
           containerName={logs.name}
           serverName={server.displayName}
-          logs={logs.logs}
+          logs={logs.logs ?? []}
           onClose={() => setLogs(null)}
         />
       )}

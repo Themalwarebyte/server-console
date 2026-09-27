@@ -64,12 +64,21 @@ function ConsoleInner() {
   const seeded = useQuery(api.console.isSeeded);
 
   const seed = useMutation(api.console.seed);
-  const refresh = useMutation(api.console.refreshInventory);
+  const importSnapshot = useMutation(api.console.importVerifiedSnapshot);
 
   const [logs, setLogs] = useState<ContainerRow | null>(null);
   const containersS1 = useQuery(api.console.listContainers, {
     serverPublicId: "srv_7f3a91c2e8",
   });
+
+  // Most recent verified observation across the fleet, for the snapshot banner.
+  const latestObservedAt = servers
+    ?.map((s) => s.lastObservedAt ?? 0)
+    .reduce((a, b) => Math.max(a, b), 0);
+
+  const isSnapshot = servers?.every(
+    (s) => (s.inventorySource ?? "demo") === "operator_snapshot",
+  );
 
   const loading =
     servers === undefined || audit === undefined || tasks === undefined;
@@ -102,24 +111,47 @@ function ConsoleInner() {
           </CardHeader>
           <CardContent className="space-y-4 text-sm text-muted-foreground">
             <p>
-              The console has no servers registered yet. Create the demo estate
-              to explore inventory, tasks, communication policy, and the audit
-              chain.
+              The console has no servers registered yet. Import the verified
+              operator snapshot to populate real, observed inventory for the
+              managed hosts.
             </p>
             <Button
               className="w-full"
               onClick={() =>
-                seed()
-                  .then(() => toast.success("Demo estate provisioned"))
+                importSnapshot()
+                  .then((r) =>
+                    toast.success(
+                      `Verified snapshot imported: ${r.containers} containers observed across ${r.servers} servers`,
+                    ),
+                  )
                   .catch((e: Error) => toast.error(e.message))
               }
             >
-              Provision demo estate
+              Import verified operator snapshot
             </Button>
             <p className="text-xs">
-              Nothing touches real infrastructure — this only creates records in
-              the console's own database.
+              The snapshot is a point-in-time observation taken by an operator
+              over the approved SSH access. It is labelled as such throughout
+              the console. No agent is enrolled, so this is not live telemetry
+              and no infrastructure is touched.
             </p>
+            <div className="border-t border-border/60 pt-3">
+              <p className="mb-2 text-xs">
+                For exploring workflows with clearly-labelled example data
+                instead:
+              </p>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() =>
+                  seed()
+                    .then(() => toast.success("Demo estate provisioned"))
+                    .catch((e: Error) => toast.error(e.message))
+                }
+              >
+                Provision demo estate (example data)
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </ConsoleLayout>
@@ -140,19 +172,23 @@ function ConsoleInner() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Fleet overview</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {servers!.length} servers under management · observed state, refreshed by agent heartbeats
+              {servers!.length} servers under management · verified operator
+              snapshot · agents not yet enrolled
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              This is a point-in-time observation, not continuous telemetry.
+              {latestObservedAt
+                ? ` Last observed: ${new Date(latestObservedAt).toISOString().replace("T", " ").slice(0, 19)} UTC · source: operator snapshot.`
+                : " No observation recorded yet."}
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              refresh()
-                .then(() => toast.success("Inventory refreshed"))
-                .catch((e: Error) => toast.error(e.message))
-            }
-          >
-            <RefreshCw className="size-3.5" /> Refresh inventory
+          {/*
+            Live refresh genuinely does not exist in V0.1: there is no agent to
+            contact. The control is present but disabled rather than wired to
+            anything that would pretend to poll a server.
+          */}
+          <Button variant="outline" size="sm" disabled title="No agent is enrolled on this host yet. Inventory refreshes when an operator takes a new verified snapshot.">
+            <RefreshCw className="size-3.5" /> Agent required for live refresh
           </Button>
         </div>
 
@@ -190,9 +226,6 @@ function ConsoleInner() {
         <div className="grid gap-4 lg:grid-cols-2">
           {servers!.map((s) => {
             const diskPct = (s.hardware.diskUsedGb / s.hardware.diskGb) * 100;
-            const expDays = Math.round(
-              (s.identity.certExpiresAt - Date.now()) / 86_400_000,
-            );
             return (
               <Card key={s.publicId} className="border-border/70 card-layer">
                 <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
@@ -212,7 +245,11 @@ function ConsoleInner() {
                   <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[12px] text-muted-foreground sm:grid-cols-4">
                     <div>
                       <div className="text-[10px] uppercase tracking-[0.12em]">Agent</div>
-                      <Mono className="text-foreground/85">{s.agent.version}</Mono>
+                      {/* No agent is enrolled in V0.1, so this is a real
+                          absence rather than a missing measurement. */}
+                      <Mono className="text-foreground/85">
+                        {s.agent ? s.agent.version : "Not enrolled"}
+                      </Mono>
                     </div>
                     <div>
                       <div className="text-[10px] uppercase tracking-[0.12em]">Docker</div>
@@ -222,8 +259,8 @@ function ConsoleInner() {
                     </div>
                     <div>
                       <div className="text-[10px] uppercase tracking-[0.12em]">Cert</div>
-                      <Mono className={cn(expDays < 15 ? "text-amber-300" : "text-foreground/85")}>
-                        {expDays}d
+                      <Mono className="text-foreground/85">
+                        {s.identity ? "Issued" : "Not issued"}
                       </Mono>
                     </div>
                     <div>
@@ -247,12 +284,16 @@ function ConsoleInner() {
                       <Meter value={diskPct} tone={diskPct > 80 ? "warn" : undefined} />
                     </div>
                   </div>
-                  {s.docker.healthy === false && (
-                    <div className="flex items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[12px] text-amber-200/90">
-                      <ShieldAlert className="size-3.5" />
-                      One container is unhealthy on this host — worker-queue keeps restarting.
-                    </div>
-                  )}
+                  {/* Real Docker-reported count, not a prototype alert. */}
+                  {typeof s.docker.unhealthy === "number" &&
+                    s.docker.unhealthy > 0 && (
+                      <div className="flex items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[12px] text-amber-200/90">
+                        <ShieldAlert className="size-3.5" />
+                        {s.docker.unhealthy} of {s.docker.total} containers
+                        report an unhealthy health check
+                        {s.docker.stopped ? `, ${s.docker.stopped} exited` : ""}.
+                      </div>
+                    )}
                 </CardContent>
               </Card>
             );
@@ -281,17 +322,26 @@ function ConsoleInner() {
                       <Dot tone={c.state === "running" ? (c.health === "healthy" ? "ok" : "warn") : "idle"} />
                     </div>
                     <div className="mt-1 truncate text-[11px] text-muted-foreground">{c.image}</div>
+                    {/*
+                      Only report a health state Docker actually reported. A
+                      container with no HEALTHCHECK is shown as such rather than
+                      being implied healthy.
+                    */}
                     <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
-                      <span className="tabular flex items-center gap-1">
-                        <Cpu className="size-3" /> {c.cpuPct.toFixed(1)}%
-                      </span>
-                      <span className="tabular flex items-center gap-1">
-                        <HardDrive className="size-3" /> {c.memPct.toFixed(1)}%
-                      </span>
-                      {c.restarts > 0 && (
-                        <span className="text-amber-300/90">{c.restarts} restarts</span>
+                      <span className="tabular">{c.state}</span>
+                      {c.healthcheckPresent ? (
+                        <span className="tabular">
+                          health: {c.health ?? "unknown"}
+                        </span>
+                      ) : (
+                        <span className="tabular">No health check</span>
                       )}
                     </div>
+                    {c.dockerStatus && (
+                      <div className="mt-1 truncate text-[10px] text-muted-foreground/70">
+                        {c.dockerStatus}
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -382,7 +432,7 @@ function ConsoleInner() {
         <LogsDialog
           containerName={logs.name}
           serverName={logs.serverPublicId === "srv_7f3a91c2e8" ? "SERVER-01" : "SERVER-02"}
-          logs={logs.logs}
+          logs={logs.logs ?? []}
           onClose={() => setLogs(null)}
         />
       )}

@@ -58,10 +58,10 @@ export function ConsoleLayout({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden items-center gap-1.5 text-[11px] text-muted-foreground md:flex">
-              <Dot tone="ok" pulse /> gateway · mTLS up
+              <Dot tone="ok" pulse /> control plane online · agents not enrolled
             </span>
             <span className="hidden font-mono text-[11px] text-muted-foreground lg:block">
-              epoch 1 · protocol v1
+              v0.1
             </span>
             <span className="text-right text-[11px] leading-tight text-muted-foreground">
               {user?.email ?? "operator"}

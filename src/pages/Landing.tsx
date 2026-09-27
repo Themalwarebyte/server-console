@@ -108,15 +108,19 @@ export default function Landing() {
               <div className="text-[13px] font-semibold tracking-tight">
                 Server Management Console
                 <span className="ml-2 font-mono text-[10px] font-normal text-muted-foreground">
-                  v0.9.4
+                  v0.1
                 </span>
               </div>
               <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                 Private control plane
               </div>
             </div>
+            {/*
+              Truthful status only. The control plane is genuinely online; no
+              agent or mTLS channel exists yet, so none is claimed.
+            */}
             <span className="ml-4 hidden items-center gap-1.5 text-[11px] text-muted-foreground md:flex">
-              <Dot ok pulse /> Gateway connected
+              <Dot ok pulse /> control plane online · agents not enrolled
             </span>
           </div>
           <nav className="flex items-center gap-2">
@@ -326,7 +330,9 @@ export default function Landing() {
       <footer className="border-t border-border/60 py-8">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 text-[11px] text-muted-foreground sm:flex-row">
           <span>Server Management Console · private deployment</span>
-          <span className="font-mono">build 0.9.4 · protocol v1 · epoch 1</span>
+          <span className="font-mono">
+            v0.1 · self-hosted Convex · agents not yet enrolled
+          </span>
         </div>
       </footer>
     </div>

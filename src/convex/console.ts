@@ -1,6 +1,7 @@
 ﻿import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOwner } from "./authz";
+import { VERIFIED_SNAPSHOT, VERIFIED_CONTAINERS } from "./verifiedSnapshot";
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                             */
@@ -153,6 +154,8 @@ export const seed = mutation({
     await ctx.db.insert("servers", {
       publicId: "srv_7f3a91c2e8",
         displayName: "SERVER-01",
+        inventorySource: "demo",
+        agentStatus: "not_enrolled",
         hostname: "gman",
         lifecycleState: "ACTIVE",
         environment: "production",
@@ -184,6 +187,8 @@ export const seed = mutation({
     await ctx.db.insert("servers", {
       publicId: "srv_2b6e40af15",
         displayName: "SERVER-02",
+        inventorySource: "demo",
+        agentStatus: "not_enrolled",
         hostname: "gman-02",
         lifecycleState: "ACTIVE",
         environment: "production",
@@ -450,7 +455,7 @@ export const restartContainer = mutation({
     await ctx.db.patch(containerId, {
       state: "running",
       health: "healthy",
-      restarts: container.restarts + 1,
+      restarts: (container.restarts ?? 0) + 1,
     });
 
     await appendAudit(ctx, {
@@ -671,36 +676,125 @@ export const listAuditForServer = query({
   },
 });
 
+/**
+ * Live inventory refresh is NOT implemented in V0.1.
+ *
+ * There is no agent on any managed host, so there is nothing to ask for a
+ * fresh observation. Rather than fabricate heartbeats or jitter the cached
+ * metrics, this refuses and points at the mechanism that does exist: a verified
+ * operator snapshot.
+ *
+ * When agents are enrolled this becomes a real fan-out to each server's agent
+ * under the same authorisation model.
+ */
 export const refreshInventory = mutation({
   args: {},
   handler: async (ctx) => {
     const actor = await requireUser(ctx);
-    const servers = await ctx.db.query("servers").collect();
-    const now = Date.now();
-    for (const s of servers) {
-      await ctx.db.patch(s._id, {
-        cpuLoad: Math.max(0.05, Math.min(0.95, s.cpuLoad + (Math.random() - 0.5) * 0.08)),
-        memUsedPct: Math.max(15, Math.min(90, s.memUsedPct + (Math.random() - 0.5) * 3)),
-        agent: { ...s.agent, lastSeenAt: now },
-      });
-      const containers = await ctx.db
+    await appendAudit(ctx, {
+      kind: "REJECTION",
+      actor,
+      summary:
+        "Inventory refresh refused: no agent is enrolled. A new verified operator snapshot is required.",
+      correlationId: ref("corr"),
+    });
+    throw new Error(
+      "Live refresh is unavailable: no agent is enrolled on the managed hosts. Import a verified operator snapshot instead.",
+    );
+  },
+});
+export const importVerifiedSnapshot = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const actor = await requireUser(ctx);
+    const { takenAt } = VERIFIED_SNAPSHOT;
+
+    for (const s of VERIFIED_SNAPSHOT.servers) {
+      const existing = await ctx.db
+        .query("servers")
+        .withIndex("by_public_id", (q) => q.eq("publicId", s.publicId))
+        .unique();
+
+      const payload = {
+        displayName: s.displayName,
+        hostname: s.hostname,
+        lifecycleState: s.lifecycleState,
+        environment: s.environment,
+        region: s.region,
+        tailscaleName: s.tailscaleName,
+        inventorySource: "operator_snapshot",
+        lastObservedAt: takenAt,
+        agentStatus: s.agentStatus,
+        observedUptimeSeconds: s.observedUptimeSeconds,
+        os: s.os,
+        hardware: {
+          cores: s.cores,
+          memoryGb: s.memoryGb,
+          diskGb: s.diskGb,
+          diskUsedGb: s.diskUsedGb,
+        },
+        cpuLoad: s.cpuLoad,
+        memUsedPct: s.memUsedPct,
+        docker: s.docker,
+        // `agent` and `identity` are deliberately NOT set. No agent is enrolled
+        // and no mTLS certificate has been issued, so absent means exactly
+        // that, and the UI renders "Not enrolled" rather than a placeholder
+        // that would look like real telemetry.
+      };
+
+      if (existing) {
+        await ctx.db.patch(existing._id, payload);
+      } else {
+        await ctx.db.insert("servers", {
+          publicId: s.publicId,
+          enrolledAt: takenAt,
+          capabilities: [],
+          ...payload,
+        });
+      }
+
+      // Replace this server's container rows with the real observed inventory.
+      const old = await ctx.db
         .query("containers")
         .withIndex("by_server", (q) => q.eq("serverPublicId", s.publicId))
         .collect();
-      for (const c of containers) {
-        if (c.state === "running" || c.state === "restarting") {
-          await ctx.db.patch(c._id, {
-            cpuPct: Math.max(0.1, Math.min(95, c.cpuPct + (Math.random() - 0.5) * 4)),
-            memPct: Math.max(2, Math.min(90, c.memPct + (Math.random() - 0.5) * 2)),
-          });
-        }
+      for (const row of old) {
+        await ctx.db.delete(row._id);
       }
+
+      const mine = VERIFIED_CONTAINERS.filter((x) => x.serverPublicId === s.publicId);
+      for (const c of mine) {
+        await ctx.db.insert("containers", {
+          serverPublicId: c.serverPublicId,
+          dockerId: `${c.name}-${s.publicId}`,
+          name: c.name,
+          image: c.image,
+          project: c.name.split("-")[0] ?? c.name,
+          state: c.state,
+          // `health` is stored only where Docker actually reports a
+          // HEALTHCHECK, so the UI can say "No health check" otherwise.
+          ...(c.healthcheckPresent
+            ? { health: c.health, healthcheckPresent: true }
+            : { healthcheckPresent: false }),
+          dockerStatus: c.dockerStatus,
+          observedAt: takenAt,
+          ports: c.ports,
+        });
+      }
+
+      await appendAudit(ctx, {
+        kind: "INVENTORY_SNAPSHOT_IMPORTED",
+        actor,
+        summary: `Verified operator snapshot imported: ${mine.length} containers observed on ${s.displayName}`,
+        serverPublicId: s.publicId,
+        correlationId: `snapshot:${s.publicId}:${takenAt}`,
+      });
     }
-    await appendAudit(ctx, {
-      correlationId: ref("corr"),
-      actor: actor,
-      kind: "REQUEST",
-      summary: "Requested fresh inventory from all agents; heartbeats and metrics updated.",
-    });
+
+    return {
+      servers: VERIFIED_SNAPSHOT.servers.length,
+      containers: VERIFIED_CONTAINERS.length,
+      observedAt: takenAt,
+    };
   },
 });

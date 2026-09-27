@@ -41,6 +41,17 @@ const schema = defineSchema(
       environment: v.string(),
       region: v.string(),
       tailscaleName: v.string(),
+
+      // How this row's telemetry was obtained. The UI keys off this so a
+      // snapshot is never presented as live telemetry.
+      // "demo" | "operator_snapshot" | "agent"
+      inventorySource: v.optional(v.string()),
+      // Epoch ms of the observation. Absent means "not observed".
+      lastObservedAt: v.optional(v.number()),
+      // Agent enrolment state. "not_enrolled" in V0.1: there are no agents.
+      agentStatus: v.optional(v.string()),
+      // Host uptime in seconds at the time of the snapshot.
+      observedUptimeSeconds: v.optional(v.number()),
       os: v.object({ name: v.string(), kernel: v.string(), arch: v.string() }),
       hardware: v.object({
         cores: v.number(),
@@ -55,20 +66,42 @@ const schema = defineSchema(
         running: v.number(),
         total: v.number(),
         healthy: v.boolean(),
+        // Docker-reported counts. Absent means unknown, never assumed.
+        stopped: v.optional(v.number()),
+        unhealthy: v.optional(v.number()),
+        composeVersion: v.optional(v.string()),
+        daemonActive: v.optional(v.boolean()),
+        rootDir: v.optional(v.string()),
+        images: v.optional(v.number()),
       }),
-      agent: v.object({
-        version: v.string(),
-        protocolVersion: v.string(),
-        connected: v.boolean(),
-        lastSeenAt: v.number(),
-        bootId: v.string(),
-      }),
-      identity: v.object({
-        fingerprint: v.string(),
-        certSerial: v.string(),
-        issuedAt: v.number(),
-        certExpiresAt: v.number(),
-      }),
+
+      /**
+       * Agent runtime facts. Optional because no agent is enrolled in V0.1 —
+       * these MUST be absent rather than fabricated, and the UI renders
+       * "Not enrolled" when they are.
+       */
+      agent: v.optional(
+        v.object({
+          version: v.string(),
+          protocolVersion: v.string(),
+          connected: v.boolean(),
+          lastSeenAt: v.number(),
+          bootId: v.string(),
+        }),
+      ),
+
+      /**
+       * mTLS identity issued to the agent. Optional for the same reason as
+       * `agent`: absent means no certificate has been issued.
+       */
+      identity: v.optional(
+        v.object({
+          fingerprint: v.string(),
+          certSerial: v.string(),
+          issuedAt: v.number(),
+          certExpiresAt: v.number(),
+        }),
+      ),
       capabilities: v.array(capability),
       enrolledAt: v.number(),
       note: v.optional(v.string()),
@@ -81,14 +114,22 @@ const schema = defineSchema(
       name: v.string(),
       image: v.string(),
       project: v.string(),
-      state: v.string(), // running | exited | paused | restarting
-      health: v.string(), // healthy | unhealthy | starting | unknown
-      cpuPct: v.number(),
-      memPct: v.number(),
-      restarts: v.number(),
-      ports: v.array(v.string()),
-      startedAt: v.number(),
-      logs: v.array(v.string()),
+      state: v.string(), // running | exited | paused | restarting | created | dead
+      // Only meaningful when healthcheckPresent is true. A container with no
+      // HEALTHCHECK must be shown as such, never as "healthy".
+      health: v.optional(v.string()), // healthy | unhealthy | starting
+      // Whether Docker reports a HEALTHCHECK for this container.
+      healthcheckPresent: v.optional(v.boolean()),
+      // Raw Docker status string, e.g. "Up 4 days (healthy)".
+      dockerStatus: v.optional(v.string()),
+      // Epoch ms of the observation this row came from.
+      observedAt: v.optional(v.number()),
+      cpuPct: v.optional(v.number()),
+      memPct: v.optional(v.number()),
+      restarts: v.optional(v.number()),
+      ports: v.optional(v.array(v.string())),
+      startedAt: v.optional(v.number()),
+      logs: v.optional(v.array(v.string())),
     }).index("by_server", ["serverPublicId"]),
 
     /**
