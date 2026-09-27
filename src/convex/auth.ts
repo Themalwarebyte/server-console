@@ -81,7 +81,16 @@ export const createAuth = (ctx: GenericCtx<DataModel>) =>
       },
     },
 
-    plugins: [convex({ authConfig }), crossDomain({ siteUrl: SITE_URL })],
+    // `jwks` must be supplied to BOTH the auth config and this plugin. When a
+    // static JWKS is present in the auth config but absent here, the deployment
+    // throws at runtime:
+    //   "Static JWKS detected in auth config, but missing from Convex plugin"
+    // Supplying it here also stops the plugin reading the JWKS from the
+    // database on every token request.
+    plugins: [
+      convex({ authConfig, jwks: process.env.BETTER_AUTH_JWKS }),
+      crossDomain({ siteUrl: SITE_URL }),
+    ],
   });
 
 export type Auth = ReturnType<typeof createAuth>;
