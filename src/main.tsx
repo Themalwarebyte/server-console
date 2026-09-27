@@ -1,5 +1,6 @@
-import { Toaster } from "@/components/ui/sonner";
+﻿import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
+import { ConsoleErrorBoundary } from "@/components/ConsoleErrorBoundary";
 import { ConvexBetterAuthProvider } from "@convex-dev/better-auth/react";
 import { ConvexReactClient } from "convex/react";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
@@ -31,7 +32,19 @@ if (!convexUrl) {
   );
 }
 
-const convex = new ConvexReactClient(convexUrl);
+/**
+ * `expectAuth: true` is required, not optional.
+ *
+ * The Convex client defaults this to `false`, which means query, mutation and
+ * action requests are issued as soon as the socket connects, WITHOUT waiting
+ * for an auth token. Our token is fetched asynchronously over a different
+ * origin (Better Auth on :8444), so the protected queries were winning that
+ * race and failing with `Unauthenticated` before the token ever arrived.
+ *
+ * With `expectAuth: true` the client holds every request back until the first
+ * token is available, so protected queries only ever run authenticated.
+ */
+const convex = new ConvexReactClient(convexUrl, { expectAuth: true });
 
 // Lazy load route components for better code splitting
 const Landing = lazy(() => import("./pages/Landing.tsx"));
@@ -128,7 +141,10 @@ createRoot(document.getElementById("root")!).render(
       >
         <BrowserRouter>
           <Suspense fallback={<RouteLoading />}>
-            <Routes>
+            {/* One sanitised boundary for every protected console route, so no
+                page can render a raw Convex error into the UI. */}
+            <ConsoleErrorBoundary>
+              <Routes>
               <Route path="/" element={<Landing />} />
               <Route
                 path="/auth"
@@ -183,7 +199,8 @@ createRoot(document.getElementById("root")!).render(
                 }
               />
               <Route path="*" element={<NotFound />} />
-            </Routes>
+              </Routes>
+            </ConsoleErrorBoundary>
           </Suspense>
         </BrowserRouter>
         <Toaster />

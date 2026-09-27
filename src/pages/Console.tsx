@@ -56,73 +56,6 @@ function relative(ts: number) {
   return `${Math.round(h / 24)}d ago`;
 }
 
-/**
- * Error state for the console shell.
- *
- * A failed Convex query and a still-loading query both leave the value
- * `undefined`, so without an explicit boundary this page could sit on skeleton
- * loaders with no indication anything was wrong. This boundary turns a thrown
- * query error into a visible, retryable state.
- *
- * The message is intentionally generic: no server names, IDs, stack traces, or
- * backend detail are shown to the user. The real failure is server-side and
- * stays in the deployment logs.
- */
-function ConsoleQueryError() {
-  return (
-    <ConsoleLayout>
-      <Card className="mx-auto mt-16 max-w-lg border-border/70 card-layer">
-        <CardHeader>
-          <CardTitle className="text-base">Cannot reach the control plane</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground">
-          <p>
-            The console could not load inventory from the self-hosted Convex
-            deployment. This is normally a connectivity or session problem
-            rather than an empty control plane.
-          </p>
-          <p className="text-xs">
-            No server details are displayed here. Retry, and if it keeps
-            failing sign out and back in so a fresh session is issued.
-          </p>
-          <Button className="w-full" onClick={() => window.location.reload()}>
-            Retry
-          </Button>
-        </CardContent>
-      </Card>
-    </ConsoleLayout>
-  );
-}
-
-/**
- * Minimal local error boundary. `convex/react` in this version does not export
- * one, and adding `@convex-dev/react` just for this would be a new dependency,
- * so the boundary is implemented here directly.
- */
-class ConsoleErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { failed: boolean }
-> {
-  state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  componentDidCatch(error: unknown) {
-    // The detail stays in the browser console for operators; the UI stays
-    // deliberately vague.
-    console.error("[Console] query failed:", error);
-  }
-
-  render() {
-    if (this.state.failed) {
-      return <ConsoleQueryError />;
-    }
-    return this.props.children;
-  }
-}
-
 function ConsoleInner() {
   useAuth();
   const servers = useQuery(api.console.listServers);
@@ -460,10 +393,4 @@ function ConsoleInner() {
  * Wraps the console in a Convex ErrorBoundary so a failed query renders a
  * visible, retryable error state instead of an indefinite skeleton.
  */
-export default function Console() {
-  return (
-    <ConsoleErrorBoundary>
-      <ConsoleInner />
-    </ConsoleErrorBoundary>
-  );
-}
+export default ConsoleInner;
