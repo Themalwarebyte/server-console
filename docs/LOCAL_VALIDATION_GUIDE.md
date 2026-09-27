@@ -45,7 +45,7 @@ cd server-console
 bun install
 ```
 
-Expect ~450 packages, no postinstall drama. If `bun` is unavailable, `npm
+Expect ~390 packages, no postinstall drama. If `bun` is unavailable, `npm
 install` works too but delete the stray `package-lock.json` ambiguity first
 (the repo is bun-lockfile-first).
 
@@ -190,13 +190,11 @@ self-issued-token provider — set it to the HTTP-actions origin:
 npx convex env set CONVEX_SITE_URL http://127.0.0.1:3211
 ```
 
-## 3.5 A note on the residual Freebuff trust anchor
+## 3.5 Freebuff trust anchor — no longer present
 
-`src/convex/auth.config.ts` still contains a `customJwt` provider trusting
-`https://freebuff.com`-issued tokens (documented in
-`docs/MIGRATION_FREEBUFF.md`). It is inert unless someone presents such a
-token, but for clean local validation you may temporarily comment it out —
-that is a one-line, reversible local test change, not a requirement.
+The `customJwt` provider that trusted `https://freebuff.com`-issued tokens in
+`src/convex/auth.config.ts` was removed as part of the platform decoupling. No
+extra local step is needed for a clean validation run.
 
 ---
 

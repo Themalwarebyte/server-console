@@ -3,11 +3,15 @@
 .env.local
 .env.*.local
 
+# dotenvx private decryption keys — must never be tracked
+.env.keys
+
 # Dependencies
 node_modules
 
 # Build output
 dist
+isolate
 
 # Convex codegen
 src/convex/_generated

@@ -71,9 +71,12 @@ Convex backend environment (secrets, never in repo):
 - `OTP_ENDPOINT_URL` — self-hosted/Owner-controlled OTP mail endpoint.
 - `OTP_API_KEY` — key for that endpoint. **Rotation of the previously
   committed key is still required** (SECURITY.md F-1).
-- `SITE_URL`, `JWKS`, `JWT_PRIVATE_KEY` — Convex Auth material per the
-  self-hosted setup guide (CLI does not support self-hosted deployments; auth
-  setup is manual — follow Convex's manual Convex Auth instructions).
+- `SITE_URL`, `JWKS`, `JWT_PRIVATE_KEY` — Convex Auth material. The Convex CLI
+  **does** support self-hosted deployments (verified against `convex@1.46.0`:
+  setting `CONVEX_SELF_HOSTED_URL` + `CONVEX_SELF_HOSTED_ADMIN_KEY` selects a
+  self-hosted deployment for `convex env set` / `convex dev`, and
+  `CONVEX_DEPLOYMENT` must be unset when they are). Set them with
+  `npx convex env set …` per `docs/LOCAL_VALIDATION_GUIDE.md` §3.4.
 
 `.env.local` (gitignored) template is documented in the repo README because
 `.env.example` cannot be created through the authoring environment's
