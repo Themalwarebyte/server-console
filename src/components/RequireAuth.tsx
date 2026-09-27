@@ -48,9 +48,12 @@ function AuthDiagnosticsPanel() {
         {row("Better Auth session", sessionState)}
         {row("token attempts", d.attempts)}
         {row("token requested", d.requested ? "yes" : "no")}
-        {row("token status", d.status ?? "n/a")}
         {row("token success", d.success ? "yes" : "no")}
-        {row("token errored", d.errored ? "yes" : "no")}
+        {row("error present", d.errorPresent ? "yes" : "no")}
+        {row("error status", d.errorStatus ?? "n/a")}
+        {row("error code", d.errorCode ?? "n/a")}
+        {row("threw", d.errored ? "yes" : "no")}
+        {row("response keys", d.responseShape || "n/a")}
         <div className="my-1 border-t border-border/60" />
         {row("jwt alg", d.header.alg ?? "n/a")}
         {row("jwt kid", d.header.kid ?? "n/a")}

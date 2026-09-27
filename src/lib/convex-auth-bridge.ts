@@ -38,12 +38,20 @@ export interface TokenDiagnostics {
   attempts: number;
   /** Whether a token request was actually issued to Better Auth. */
   requested: boolean;
-  /** HTTP status returned by the token endpoint, when available. */
-  status: number | null;
+  /** Whether Better Auth returned an in-band error (not only whether we threw). */
+  errorPresent: boolean;
+  /** Safe, non-secret fields from `result.error`, when it exposes them. */
+  errorStatus: number | null;
+  errorCode: string | null;
   /** Whether a non-empty token came back. */
   success: boolean;
   /** Whether the fetch threw. */
   errored: boolean;
+  /**
+   * Key names of the response object actually observed. Names only, never
+   * values — safe, and it settles the response-shape question immediately.
+   */
+  responseShape: string;
   /** Safe, decoded JWT metadata only. Never the token itself. */
   header: { alg?: string; kid?: string; typ?: string };
   claims: { iss?: string; aud?: unknown; sub?: string; exp?: number };
@@ -52,9 +60,12 @@ export interface TokenDiagnostics {
 const EMPTY_DIAGNOSTICS: TokenDiagnostics = {
   attempts: 0,
   requested: false,
-  status: null,
+  errorPresent: false,
+  errorStatus: null,
+  errorCode: null,
   success: false,
   errored: false,
+  responseShape: "",
   header: {},
   claims: {},
 };
@@ -136,7 +147,10 @@ export function useAuthFromBetterAuth(): {
           attempts: diagnostics.attempts + 1,
           requested: false,
           success: false,
-          status: null,
+          errorPresent: false,
+          errorStatus: null,
+          errorCode: null,
+          responseShape: "",
         });
         return null;
       }
@@ -145,31 +159,72 @@ export function useAuthFromBetterAuth(): {
         attempts: diagnostics.attempts + 1,
         requested: true,
         success: false,
-        status: null,
+        errorPresent: false,
+        errorStatus: null,
+        errorCode: null,
         errored: false,
+        responseShape: "",
+        header: {},
+        claims: {},
       });
 
       try {
-        // B/C. Ask Better Auth's Convex plugin for a JWT. No caching: each
-        //      call performs a real request, and forceRefreshToken therefore
-        //      naturally yields a fresh token.
-        const result = await authClient.convex.token({
-          fetchOptions: { throw: false },
-        });
+        // The endpoint is declared in @convex-dev/better-auth as
+        //   createAuthEndpoint("/convex/token", { method: "GET", requireHeaders: true, use: [sessionMiddleware] })
+        // i.e. a GET with no request body, returning { token: string }.
+        // Request options are the SECOND parameter of Better Auth's $fetch,
+        // so passing an object here would be sent as an endpoint body. The
+        // simplest official call shape is therefore no arguments at all.
+        const result = await authClient.convex.token();
 
-        const token =
-          result && typeof result === "object" && "data" in result
-            ? ((result as { data?: { token?: string } }).data?.token ?? null)
-            : null;
+        // Better Auth's own normalizer (dist/client/session-atom.mjs) treats a
+        // result as already-wrapped only when it has BOTH `data` and `error`;
+        // otherwise the result IS the payload. The token endpoint's payload is
+        // { token }, so it is unwrapped. Mirroring the library's own logic
+        // avoids guessing at response shapes.
+        const wrapped =
+          typeof result === "object" &&
+          result !== null &&
+          "data" in result &&
+          "error" in result;
+        const data = wrapped
+          ? (result as { data?: { token?: string } }).data
+          : (result as { token?: string } | null | undefined);
+        const error = wrapped
+          ? (result as { error?: unknown }).error
+          : null;
+
+        // Key names only, never values.
+        const shape =
+          typeof result === "object" && result !== null
+            ? Object.keys(result as object).join(",")
+            : typeof result;
+
+        if (error) {
+          const e = error as { status?: unknown; code?: unknown };
+          setDiagnostics({
+            errorPresent: true,
+            errorStatus: typeof e.status === "number" ? e.status : null,
+            errorCode: typeof e.code === "string" ? e.code : null,
+            responseShape: shape,
+          });
+          return null;
+        }
+
+        const token = data?.token ?? null;
 
         if (!token) {
-          setDiagnostics({ success: false, requested: true });
+          setDiagnostics({ success: false, responseShape: shape });
           return null;
         }
 
         // D. Safe metadata only. The token itself goes no further than the
         //    return value, straight back to Convex.
-        setDiagnostics({ success: true, requested: true, ...decodeJwtMetadata(token) });
+        setDiagnostics({
+          success: true,
+          responseShape: shape,
+          ...decodeJwtMetadata(token),
+        });
         return token;
       } catch (error) {
         console.error("[convex-auth-bridge] token fetch failed:", error);
