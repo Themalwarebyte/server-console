@@ -1,4 +1,4 @@
-syntax = "proto3";
+﻿syntax = "proto3";
 
 package smc.v1;
 
@@ -80,7 +80,7 @@ message HostTelemetry {
   double load_5 = 12;
   double load_15 = 13;
   double cpu_percent = 14;
-  uint32 cpu_cores = 15;
+  uint32 logical_cpu_count = 15;
 
   uint64 mem_total_bytes = 16;
   uint64 mem_available_bytes = 17;

@@ -339,11 +339,7 @@ export const getServer = query({
   args: { publicId: v.string() },
   handler: async (ctx, { publicId }) => {
     await requireOwner(ctx);
-    const all = await ctx.db
-      .query("servers")
-      .withIndex("by_public_id", (q) => q.eq("publicId", publicId))
-      .collect();
-    return all[0] ?? null;
+    return findManagedServer(ctx, publicId);
   },
 });
 
@@ -411,12 +407,17 @@ export const restartContainer = mutation({
     const actor = await requireUser(ctx);
     const container = await ctx.db.get(containerId);
     if (!container) throw new Error("Container not found");
-    const serverRows = await ctx.db
-      .query("servers")
-      .withIndex("by_public_id", (q) => q.eq("publicId", container.serverPublicId))
-      .collect();
-    const server = serverRows[0];
-    if (!server) throw new Error("Server not found");
+      const serverRows = await ctx.db
+        .query("servers")
+        .withIndex("by_public_id", (q) => q.eq("publicId", container.serverPublicId))
+        .collect();
+      if (serverRows.length > 1) {
+        throw new Error(
+          `Identity integrity violation: ${serverRows.length} server documents share publicId "${container.serverPublicId}".`,
+        );
+      }
+      const server = serverRows[0];
+      if (!server) throw new Error("Server not found");
 
     const cap = server.capabilities.find(
       (c) => c.code === "docker.container.restart",
@@ -703,6 +704,36 @@ export const refreshInventory = mutation({
     );
   },
 });
+/**
+ * Fail-closed managed-server identity lookup.
+ *
+ * A managed server is identified by its immutable `publicId`. Exactly one
+ * document may carry a given `publicId`; if that is ever violated the caller
+ * must find out immediately rather than silently operating on whichever row
+ * happened to sort first. Silently picking one would let two identities for one
+ * host drift apart and corrupt the audit trail without anything reporting it.
+ *
+ * Returns null when no such server exists, which is the only legitimate case
+ * for an insert.
+ */
+async function findManagedServer(
+  ctx: MutationCtx | QueryCtx,
+  publicId: string,
+) {
+  const rows = await ctx.db
+    .query("servers")
+    .withIndex("by_public_id", (q) => q.eq("publicId", publicId))
+    .collect();
+
+  if (rows.length > 1) {
+    throw new Error(
+      `Identity integrity violation: ${rows.length} server documents share publicId "${publicId}". ` +
+        "Refusing to proceed. Investigate the duplicate identities before retrying.",
+    );
+  }
+  return rows[0] ?? null;
+}
+
 export const importVerifiedSnapshot = mutation({
   args: {},
   handler: async (ctx) => {
@@ -710,10 +741,11 @@ export const importVerifiedSnapshot = mutation({
     const { takenAt } = VERIFIED_SNAPSHOT;
 
     for (const s of VERIFIED_SNAPSHOT.servers) {
-      const existing = await ctx.db
-        .query("servers")
-        .withIndex("by_public_id", (q) => q.eq("publicId", s.publicId))
-        .first();
+      // Idempotent by construction: exactly one document per publicId, patched
+      // in place. A second document is never inserted, and a pre-existing
+      // duplicate is a hard error rather than something to paper over.
+      const existing = await findManagedServer(ctx, s.publicId);
+
 
       const payload = {
         displayName: s.displayName,

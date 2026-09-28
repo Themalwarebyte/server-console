@@ -55,7 +55,7 @@ type HostTelemetry struct {
 	Load5          float64  `json:"load5"`
 	Load15         float64  `json:"load15"`
 	CPUPercent     float64  `json:"cpuPercent"`
-	CPUCores       int      `json:"cpuCores"`
+	LogicalCPUCount       int      `json:"LogicalCPUCount"`
 	MemTotalBytes  uint64   `json:"memTotalBytes"`
 	MemAvailBytes  uint64   `json:"memAvailableBytes"`
 	MemUsedBytes   uint64   `json:"memUsedBytes"`

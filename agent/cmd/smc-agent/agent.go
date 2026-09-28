@@ -212,7 +212,7 @@ func (a *agent) sendHost(ctx context.Context) error {
 			Load_5:            h.Load5,
 			Load_15:           h.Load15,
 			CpuPercent:        pct,
-			CpuCores:          uint32(h.CPUCores),
+			LogicalCpuCount: uint32(h.LogicalCPUCount),
 			MemTotalBytes:     h.MemTotalBytes,
 			MemAvailableBytes: h.MemAvailBytes,
 			MemUsedBytes:      h.MemUsedBytes,

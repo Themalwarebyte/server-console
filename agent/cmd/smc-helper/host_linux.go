@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bufio"
@@ -61,9 +61,9 @@ func collectHost() (*ipc.HostTelemetry, error) {
 			h.Load1, h.Load5, h.Load15 = atof(f[0]), atof(f[1]), atof(f[2])
 		}
 	}
-	h.CPUCores = countCPUCores()
-	if h.CPUCores < 1 {
-		h.CPUCores = 1
+	h.LogicalCPUCount = countLogicalCPUs()
+	if h.LogicalCPUCount < 1 {
+		h.LogicalCPUCount = 1
 	}
 
 	if mi, err := readMemInfo(); err == nil {
@@ -249,7 +249,12 @@ func unescapeMount(s string) string {
 	return b.String()
 }
 
-func countCPUCores() int {
+// countLogicalCPUs counts LOGICAL processors, which is what /proc/cpuinfo
+// enumerates. Physical core count is deliberately NOT reported: reading it
+// reliably requires topology (e.g. thread_siblings_list or core_id) that is not
+// uniformly available, and inferring it from the logical count would be wrong
+// on any host with SMT.
+func countLogicalCPUs() int {
 	f, err := os.Open("/proc/cpuinfo")
 	if err != nil {
 		return 0
