@@ -18,6 +18,12 @@ import (
 // DefaultSocket is the only path the agent will talk to.
 const DefaultSocket = "/run/smc-agent/helper.sock"
 
+// DefaultTimeout is generous because the helper performs a real Docker
+// enumeration. A full pass inspects and samples every container, which on a
+// shared production host is not instantaneous. The helper applies the same
+// bound, so neither side can wedge on a stuck collector.
+const DefaultTimeout = 45 * time.Second
+
 type Client struct {
 	Socket  string
 	Timeout time.Duration
@@ -27,7 +33,7 @@ func New(socket string) *Client {
 	if socket == "" {
 		socket = DefaultSocket
 	}
-	return &Client{Socket: socket, Timeout: 10 * time.Second}
+	return &Client{Socket: socket, Timeout: DefaultTimeout}
 }
 
 func (c *Client) call(ctx context.Context, op string) (*ipc.Response, error) {

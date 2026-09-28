@@ -1,6 +1,10 @@
 ﻿package main
 
 import (
+	"crypto/x509"
+	"encoding/pem"
+	"os"
+
 	"context"
 	"io"
 	"log"
@@ -9,9 +13,11 @@ import (
 	"time"
 
 	smcv1 "github.com/themalwarebyte/server-console/agent/gen/smcv1"
+	"github.com/themalwarebyte/server-console/agent/internal/agentid"
 	"github.com/themalwarebyte/server-console/agent/internal/helperclient"
 	"github.com/themalwarebyte/server-console/agent/internal/ipc"
 )
+// agent drives the single long-lived stream.
 
 // agent drives the single long-lived stream.
 //
@@ -22,7 +28,8 @@ type agent struct {
 	id      string
 	version string
 	proto   string
-	helper  *helperclient.Client
+	helper   *helperclient.Client
+	certPath string
 	stream  smcv1.AgentChannel_ConnectClient
 
 	seq atomic.Uint64
@@ -137,7 +144,17 @@ func (a *agent) sendHello() {
 
 func (a *agent) certFingerprint() string {
 	// Reported for operator traceability. The gateway uses its own verified
-	// certificate value as authoritative and rejects any mismatch.
+	// certificate value as authoritative and rejects any mismatch, so this is
+	// never trusted for authorisation.
+	der, err := os.ReadFile(a.certPath)
+	if err != nil {
+		return ""
+	}
+	if block, _ := pem.Decode(der); block != nil {
+		if c, err := x509.ParseCertificate(block.Bytes); err == nil {
+			return agentid.Fingerprint(c.Raw)
+		}
+	}
 	return ""
 }
 

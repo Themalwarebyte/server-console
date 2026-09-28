@@ -106,11 +106,15 @@ func (d *dockerCollector) collect() (*ipc.DockerTelemetry, error) {
 			}
 		}
 
-		// A container that stops mid-sample is reported without a figure
-		// rather than with a wrong one.
-		if stats, err := containerStats(ctx, cli, c.ID); err == nil {
-			row.CPUPercent = d.cpuDelta(c.ID, stats.CPU, now)
-			row.MemoryBytes = stats.Mem
+		// A container that is not running has no live resource figures worth
+		// sampling, and sampling it would be wasted work. Exited and created
+		// containers are reported without a CPU or memory figure rather than
+		// with a misleading one.
+		if c.State == "running" {
+			if stats, err := containerStats(ctx, cli, c.ID); err == nil {
+				row.CPUPercent = d.cpuDelta(c.ID, stats.CPU, now)
+				row.MemoryBytes = stats.Mem
+			}
 		}
 
 		countState(out, c.State)

@@ -27,8 +27,10 @@ import (
 const (
 	sockDir  = "/run/smc-agent"
 	sockPath = sockDir + "/helper.sock"
-	// Per-request ceiling. A stuck client cannot hold a root goroutine open.
-	requestTimeout = 10 * time.Second
+	// Per-request ceiling, matched by the agent's client timeout. A full Docker
+	// pass inspects and samples every container, so this is generous by design
+	// rather than a tight 10s window that would abort a real enumeration.
+	requestTimeout = 45 * time.Second
 	maxRequestSize = 64 * 1024
 )
 

@@ -713,7 +713,7 @@ export const importVerifiedSnapshot = mutation({
       const existing = await ctx.db
         .query("servers")
         .withIndex("by_public_id", (q) => q.eq("publicId", s.publicId))
-        .unique();
+        .first();
 
       const payload = {
         displayName: s.displayName,

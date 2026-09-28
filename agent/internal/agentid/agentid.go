@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // SPFFEPrefix is the URI SAN scheme. serverPublicId is the full SPIFFE ID.
@@ -83,11 +84,19 @@ func Fingerprint(der []byte) string {
 // ServerIDFromCert extracts the serverPublicId from the URI SAN. This is the
 // authoritative identity: it comes from the verified certificate, never from a
 // payload field.
+//
+// The SAN is a SPIFFE id whose trust domain is the authority component, so
+// spiffe://smc/srv_... parses as Scheme "spiffe", Host "smc", Path "/srv_...".
 func ServerIDFromCert(cert *x509.Certificate) (string, bool) {
 	for _, u := range cert.URIs {
-		if u != nil && u.Scheme == "smc" && u.Host == "" && u.Path != "" {
-			return u.Path, true
+		if u == nil || u.Scheme != "spiffe" || u.Host != "smc" {
+			continue
 		}
+		id := strings.TrimPrefix(u.Path, "/")
+		if id == "" {
+			continue
+		}
+		return id, true
 	}
 	return "", false
 }

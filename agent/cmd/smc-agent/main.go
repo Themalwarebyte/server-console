@@ -170,7 +170,8 @@ func run(ctx context.Context) error {
 		id:      *serverID,
 		version: version,
 		proto:   protoVersion,
-		helper:  helperclient.New(""),
+		helper:   helperclient.New(""),
+		certPath: *certFile,
 		stream:  stream,
 	}
 	return a.loop(ctx)
