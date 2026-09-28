@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
+import { AgentBadge, LiveMetrics, useAgentViews } from "@/components/console/AgentStatus";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -62,6 +63,7 @@ function ConsoleInner() {
   const audit = useQuery(api.console.listAudit);
   const tasks = useQuery(api.console.listTasks);
   const seeded = useQuery(api.console.isSeeded);
+  const agentViews = useAgentViews();
 
   const seed = useMutation(api.console.seed);
   const importSnapshot = useMutation(api.console.importVerifiedSnapshot);
@@ -226,64 +228,74 @@ function ConsoleInner() {
         <div className="grid gap-4 lg:grid-cols-2">
           {servers!.map((s) => {
             const diskPct = (s.hardware.diskUsedGb / s.hardware.diskGb) * 100;
+              const agentView =
+                agentViews?.find((a) => a.serverPublicId === s.publicId) ?? {
+                  serverPublicId: s.publicId,
+                  enrolled: false, online: false, lastHeartbeatAt: null, lastObservedAt: null, inventorySource: "demo", certFingerprint: null, certSerial: null, containers: [] };
             return (
               <Card key={s.publicId} className="border-border/70 card-layer">
-                <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-                  <CardTitle className="flex items-center gap-2.5 text-base">
-                    <Dot tone={s.lifecycleState === "ACTIVE" ? "ok" : "warn"} pulse />
-                    {s.displayName}
-                    <LifecycleBadge state={s.lifecycleState} />
-                  </CardTitle>
-                  <Link
-                    to={`/console/servers/${s.publicId}`}
-                    className="text-xs text-primary hover:underline"
-                  >
-                    details <ArrowRight className="inline size-3" />
-                  </Link>
-                </CardHeader>
+                  <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+                    <CardTitle className="flex flex-col gap-1.5 text-base">
+                      <span className="flex items-center gap-2.5">
+                        {/* Lifecycle no longer implies presence. A host is only
+                            shown as live when an agent is actually reporting. */}
+                        <Dot
+                          tone={
+                            agentView?.online
+                              ? "ok"
+                              : agentView?.enrolled
+                                ? "warn"
+                                : "idle"
+                          }
+                          pulse={agentView?.online}
+                        />
+                        {s.displayName}
+                        <LifecycleBadge state={s.lifecycleState} />
+                      </span>
+                      <AgentBadge view={agentView} />
+                    </CardTitle>
+                    <Link
+                      to={`/console/servers/${s.publicId}`}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      details <ArrowRight className="inline size-3" />
+                    </Link>
+                  </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[12px] text-muted-foreground sm:grid-cols-4">
-                    <div>
-                      <div className="text-[10px] uppercase tracking-[0.12em]">Agent</div>
-                      {/* No agent is enrolled in V0.1, so this is a real
-                          absence rather than a missing measurement. */}
-                      <Mono className="text-foreground/85">
-                        {s.agent ? s.agent.version : "Not enrolled"}
-                      </Mono>
-                    </div>
-                    <div>
-                      <div className="text-[10px] uppercase tracking-[0.12em]">Docker</div>
-                      <Mono className="text-foreground/85">
-                        {s.docker.version.split("-")[0]}
-                      </Mono>
-                    </div>
-                    <div>
-                      <div className="text-[10px] uppercase tracking-[0.12em]">Cert</div>
-                      <Mono className="text-foreground/85">
-                        {s.identity ? "Issued" : "Not issued"}
-                      </Mono>
-                    </div>
-                    <div>
-                      <div className="text-[10px] uppercase tracking-[0.12em]">Load</div>
-                      <Mono className="text-foreground/85">{s.cpuLoad.toFixed(2)}</Mono>
-                    </div>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <div className="mb-1.5 flex justify-between text-[11px] text-muted-foreground">
-                        <span>Memory</span>
-                        <span className="tabular">{s.memUsedPct.toFixed(0)}% of {s.hardware.memoryGb} GiB</span>
+                    {/*
+                      For an enrolled host every figure below comes from live
+                      telemetry. For a host with no agent the operator snapshot
+                      is shown, clearly labelled, and never as current state.
+                    */}
+                    <LiveMetrics view={agentView} />
+                    {!agentView.enrolled && (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <div className="mb-1.5 flex justify-between text-[11px] text-muted-foreground">
+                            <span>Memory (snapshot)</span>
+                            <span className="tabular">
+                              {s.memUsedPct.toFixed(0)}% of {s.hardware.memoryGb} GiB
+                            </span>
+                          </div>
+                          <Meter
+                            value={s.memUsedPct}
+                            tone={s.memUsedPct > 60 ? "warn" : undefined}
+                          />
+                        </div>
+                        <div>
+                          <div className="mb-1.5 flex justify-between text-[11px] text-muted-foreground">
+                            <span>Disk (snapshot)</span>
+                            <span className="tabular">
+                              {diskPct.toFixed(0)}% of {s.hardware.diskGb} GiB
+                            </span>
+                          </div>
+                          <Meter
+                            value={diskPct}
+                            tone={diskPct > 80 ? "warn" : undefined}
+                          />
+                        </div>
                       </div>
-                      <Meter value={s.memUsedPct} tone={s.memUsedPct > 60 ? "warn" : undefined} />
-                    </div>
-                    <div>
-                      <div className="mb-1.5 flex justify-between text-[11px] text-muted-foreground">
-                        <span>Disk</span>
-                        <span className="tabular">{diskPct.toFixed(0)}% of {s.hardware.diskGb} GiB</span>
-                      </div>
-                      <Meter value={diskPct} tone={diskPct > 80 ? "warn" : undefined} />
-                    </div>
-                  </div>
+                    )}
                   {/* Real Docker-reported count, not a prototype alert. */}
                   {typeof s.docker.unhealthy === "number" &&
                     s.docker.unhealthy > 0 && (

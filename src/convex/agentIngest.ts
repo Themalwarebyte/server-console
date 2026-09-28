@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import type { HttpRouter } from "convex/server";
 import type { GenericMutationCtx } from "convex/server";
 import { requireOwner } from "./authz";
-import type { DataModel } from "./_generated/dataModel";
+import type { DataModel, Doc } from "./_generated/dataModel";
 
 /**
  * Agent telemetry ingestion.
@@ -156,10 +156,19 @@ export const ingestAgentTelemetry = mutation({
       throw new Error("unknown kind");
     }
 
-    const server = await ctx.db
+    // Fail closed on duplicate identities. A managed server is identified by its
+    // immutable publicId; if two documents ever claim it, that is corruption and
+    // telemetry must be refused rather than attributed to an arbitrary one.
+    const rows = await ctx.db
       .query("servers")
       .withIndex("by_public_id", (q) => q.eq("publicId", a.serverPublicId))
-      .first();
+      .collect();
+    if (rows.length > 1) {
+      throw new Error(
+        `Identity integrity violation: ${rows.length} server documents share publicId "${a.serverPublicId}". Telemetry refused.`,
+      );
+    }
+    const server = rows[0];
     if (!server) {
       // Identity is established by enrollment, never by telemetry arrival.
       return { stored: false, reason: "unknown server" };
@@ -258,6 +267,60 @@ export const listAgentEvents = query({
 });
 
 /**
+ * Latest host telemetry for every managed host, for the Fleet view.
+ *
+ * One row per server, chosen as the most recent observation of that kind. A
+ * host with no agent simply has no row, which is how the UI tells "not
+ * enrolled" apart from "enrolled but silent".
+ */
+export const allLiveHostTelemetry = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireOwner(ctx);
+    // by_server_kind is [serverPublicId, kind], so kind cannot be a leading
+    // filter. The most recent row per kind is taken in memory instead.
+    const rows = (await ctx.db
+      .query("agentTelemetry")
+      .collect())
+      .filter((r) => r.kind === "host")
+      .sort((a, b) => b.observedAtMs - a.observedAtMs);
+
+    const seen = new Set<string>();
+    const out: Doc<"agentTelemetry">[] = [];
+    for (const r of rows) {
+      if (seen.has(r.serverPublicId)) continue;
+      seen.add(r.serverPublicId);
+      out.push(r);
+    }
+    return out;
+  },
+});
+
+/** Latest Docker telemetry for every managed host, same shape as above. */
+export const allLiveDockerTelemetry = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireOwner(ctx);
+    // by_server_kind is [serverPublicId, kind], so kind cannot be a leading
+    // filter. The most recent row per kind is taken in memory instead.
+    const rows = (await ctx.db
+      .query("agentTelemetry")
+      .collect())
+      .filter((r) => r.kind === "docker")
+      .sort((a, b) => b.observedAtMs - a.observedAtMs);
+
+    const seen = new Set<string>();
+    const out: Doc<"agentTelemetry">[] = [];
+    for (const r of rows) {
+      if (seen.has(r.serverPublicId)) continue;
+      seen.add(r.serverPublicId);
+      out.push(r);
+    }
+    return out;
+  },
+});
+
+/**
  * Marks a certificate revoked. The gateway refuses the certificate on the next
  * dial, because agents re-dial rather than holding a session open.
  */
@@ -265,10 +328,16 @@ export const revokeCertificate = mutation({
   args: { serverPublicId: v.string() },
   handler: async (ctx, a) => {
     await requireOwner(ctx);
-    const server = await ctx.db
+    const serverRows = await ctx.db
       .query("servers")
       .withIndex("by_public_id", (q) => q.eq("publicId", a.serverPublicId))
-      .first();
+      .collect();
+    if (serverRows.length > 1) {
+      throw new Error(
+        `Identity integrity violation: ${serverRows.length} server documents share publicId "${a.serverPublicId}".`,
+      );
+    }
+    const server = serverRows[0];
     if (!server) throw new Error("unknown server");
     await ctx.db.patch(server._id, {
       agentStatus: "revoked",
