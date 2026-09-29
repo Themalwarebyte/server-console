@@ -56,6 +56,10 @@ message Hello {
   // SHA-256 of the agent's leaf certificate, for operator-visible traceability.
   string cert_fingerprint = 4;
   string host_boot_id = 5;
+  // Capabilities this agent binary actually implements. A Milestone A agent
+  // leaves this empty, which is how the control plane knows it cannot serve
+  // docker.logs.read. Support is never inferred from agent_version.
+  repeated string supported = 6;
 }
 
 message Heartbeat {

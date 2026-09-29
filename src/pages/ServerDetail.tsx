@@ -1,4 +1,4 @@
-import {
+﻿import {
   Dot,
   LifecycleBadge,
   LogsDialog,
@@ -7,6 +7,7 @@ import {
   RiskBadge,
 } from "@/components/console/ui";
 import { ago, useAgentViews } from "@/components/console/AgentStatus";
+import { LogAccessControl } from "@/components/console/LogDialog";
 import { ConsoleLayout } from "@/components/console/ConsoleLayout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -71,6 +72,10 @@ export default function ServerDetail() {
   // carry derived state, and the health view deliberately omits certificate
   // material, exposing only the expiry the UI needs for a warning.
   const agentViews = useAgentViews();
+  // Effective docker.logs.read: agent-proven AND centrally permitted AND ONLINE.
+  const logReadAvailable = agentViews?.find(
+    (a) => a.serverPublicId === publicId,
+  )?.logReadAvailable;
   const agentView = agentViews?.find(
     (a) => a.serverPublicId === publicId,
   );
@@ -125,6 +130,12 @@ export default function ServerDetail() {
       .finally(() => setBusy(null));
   };
 
+  // Live containers come from agent telemetry, which carries the real Docker
+  // ids a log request needs. The legacy table below shows the seeded view.
+  const liveContainers = useQuery(api.agentIngest.liveContainers, {
+    serverPublicId: server?.publicId ?? "",
+  });
+
   return (
     <ConsoleLayout>
       <div className="space-y-6">
@@ -171,6 +182,57 @@ export default function ServerDetail() {
 
         {/* hardware */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card className="border-border/70 card-layer">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-[13px] font-medium text-muted-foreground">
+                <ScrollText className="size-4" /> Container logs
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">
+                Read-only bounded tail. Availability follows the EFFECTIVE
+                capability: the agent must prove it supports the read and
+                central policy must permit it.
+              </p>
+              {logReadAvailable === true ? (
+                <div className="max-h-64 space-y-1 overflow-auto">
+                  {(liveContainers ?? []).map((c) => (
+                    <div
+                      key={c.id}
+                      className="flex items-center justify-between gap-3 rounded border border-border/50 px-2 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <Mono className="block truncate text-foreground/85">
+                          {c.name}
+                        </Mono>
+                        <span className="text-[10px] text-muted-foreground">
+                          {c.state} ·{" "}
+                          {c.healthCheckPresent
+                            ? `health: ${c.health ?? "unknown"}`
+                            : "No health check"}
+                        </span>
+                      </div>
+                      <LogAccessControl
+                        serverPublicId={server.publicId}
+                        containerId={c.id}
+                        containerName={c.name}
+                        available
+                      />
+                    </div>
+                  ))}
+                  {(liveContainers ?? []).length === 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      No container inventory reported yet.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  Log access not available on this host
+                </p>
+              )}
+            </CardContent>
+          </Card>
           <Card className="border-border/70 card-layer">
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-[13px] font-medium text-muted-foreground">
@@ -436,6 +498,7 @@ export default function ServerDetail() {
                         </div>
                       )}
                     </TableCell>
+
                     <TableCell className="hidden max-w-72">
                       <Mono className="block truncate text-muted-foreground">{c.image}</Mono>
                     </TableCell>

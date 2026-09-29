@@ -69,6 +69,9 @@ type agentSession struct {
 	ConnectedAt  time.Time
 	// out carries dispatch messages to the connected agent.
 	out          chan *smcv1.GatewayMessage
+	// AgentSupported is what the AGENT advertised in its Hello, not what the
+	// gateway granted. Empty means an older agent that cannot do logs.
+	AgentSupported []string
 	LastSeen     atomic.Int64
 	Active       atomic.Bool
 }
@@ -237,11 +240,11 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 	// Health signal on the same authenticated channel: a connection is a state
 	// change the control plane needs, and it is not telemetry. The agent version
 	// is not known until Hello arrives, so it is filled in there.
-	go s.reportStatus(id, fp, serial, "connected", "", "", notAfterMs)
+	go s.reportStatus(id, fp, serial, "connected", "", "", notAfterMs, nil)
 	defer func() {
 		ses.Active.Store(false)
 		log.Printf("agent disconnected: serverPublicId=%s", id)
-		go s.reportStatus(id, fp, serial, "disconnected", "", "", notAfterMs)
+		go s.reportStatus(id, fp, serial, "disconnected", "", "", notAfterMs, nil)
 	}()
 
 	if err := stream.Send(&smcv1.GatewayMessage{Payload: &smcv1.GatewayMessage_HelloAck{
@@ -275,6 +278,11 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 				return status.Error(codes.PermissionDenied, "server identity mismatch")
 			}
 			ses.AgentVersion = p.Hello.GetAgentVersion()
+		ses.AgentSupported = p.Hello.GetSupported()
+		// Re-report on Hello so the control plane learns support at connect time,
+		// not only at first bind.
+		go s.reportStatus(id, fp, serial, "connected", ses.AgentVersion,
+			p.Hello.GetProtocolVersion(), notAfterMs, ses.AgentSupported)
 			log.Printf("hello ok: agentVersion=%s protocol=%s", ses.AgentVersion, p.Hello.GetProtocolVersion())
 
 		case *smcv1.AgentMessage_Heartbeat:
@@ -317,7 +325,7 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 // reportStatus publishes a connection-state change to the control plane over the
 // existing authenticated ingest endpoint. No new channel, credential, or
 // listener is involved.
-func (s *svc) reportStatus(id, fp, serial, state, agentVersion, protoVersion string, notAfterMs int64) {
+func (s *svc) reportStatus(id, fp, serial, state, agentVersion, protoVersion string, notAfterMs int64, agentSupported []string) {
 	_ = s.ingest.push("status", id, fp, serial, time.Now().UnixMilli(), map[string]any{
 		"state":           state,
 		"agentVersion":    agentVersion,
@@ -325,10 +333,15 @@ func (s *svc) reportStatus(id, fp, serial, state, agentVersion, protoVersion str
 		// Leaf certificate expiry, as a date. The control plane records it so
 		// the UI can warn; no certificate material leaves the gateway.
 		"certNotAfterMs": notAfterMs,
-		// The capability ceiling this gateway granted to the host, echoed back
-		// so the control plane knows exactly what each host supports. Support
-		// is never inferred from an agent version number.
-		"capabilities": ceilingList(),
+		// The capabilities this gateway GRANTED. This is a grant, not proof of
+		// support, and the control plane must not treat it as such.
+		"ceiling": ceilingList(),
+		// The capabilities the AGENT ITSELF advertised in its Hello. An older
+		// agent binary does not send this field at all, so a Milestone A agent
+		// reports an empty list and is correctly shown as NOT supporting
+		// docker.logs.read. Support is therefore proven by the agent, never
+		// inferred from a version string, a hostname, or the gateway's intent.
+		"agentSupported": agentSupported,
 	})
 }
 

@@ -75,11 +75,20 @@ export const requestContainerLogs = mutation({
     if (hb === 0 || now - hb > 45_000) throw new Error("Agent is offline.");
     if (tel === 0 || now - tel > 30_000) throw new Error("Agent is degraded.");
 
-    // 5. Capability support, as ADVERTISED by the enrolled agent. Support is
-    //    never inferred from an agent version number.
-    const advertised = await advertisedCapabilities(ctx, a.serverPublicId);
-    if (!advertised.includes("docker.logs.read")) {
-      throw new Error("Host does not support docker.logs.read.");
+    // 5. EFFECTIVE capability. The agent must prove its binary SUPPORTS the
+    //    read, and central policy must PERMIT it. A gateway that merely wishes
+    //    to grant it is not enough, so an older agent stays unsupported.
+    const supported = await agentSupported(ctx, a.serverPublicId);
+    const granted = await grantedCeiling(ctx, a.serverPublicId);
+    const centrallyPermitted = process.env.CENTRAL_LOG_POLICY !== "deny";
+    if (!supported.includes("docker.logs.read")) {
+      throw new Error("Host agent does not support docker.logs.read.");
+    }
+    if (!centrallyPermitted) {
+      throw new Error("Central policy does not permit docker.logs.read.");
+    }
+    if (!granted.includes("docker.logs.read")) {
+      throw new Error("Host ceiling does not include docker.logs.read.");
     }
 
     // 6. Exact container id only. A name, prefix, regex or glob is refused
@@ -318,13 +327,17 @@ export const completeLogRequest = mutation({
 // ---------------------------------------------------------------------------
 
 /**
- * Reads the result of a completed request, once, for the Owner.
+ * Consumes the result of a completed read, once, for the Owner.
  *
- * The result is deleted on read, so the buffer is emptied as soon as the
- * authenticated browser has collected it. Content is returned as data for text
- * rendering only; it is never interpreted as markup.
+ * NAMING IS DELIBERATE. The buffer row is deleted as part of THIS
+ * authenticated consumption, not "after render": the server cannot know whether
+ * a browser actually painted what it was sent. If the browser disappears
+ * first, the 2-minute expiry cleanup removes the row instead.
+ *
+ * Content is returned as data for TEXT rendering only. It is never interpreted
+ * as markup.
  */
-export const readLogResult = mutation({
+export const consumeLogResult = mutation({
   args: { requestId: v.string() },
   handler: async (ctx, a) => {
     await requireOwner(ctx);
@@ -337,16 +350,21 @@ export const readLogResult = mutation({
     if (!req) return { status: "UNKNOWN" as const };
 
     if (req.status === "PENDING" || req.status === "CLAIMED" || req.status === "RUNNING") {
-      return { status: req.status as "PENDING" | "CLAIMED" | "RUNNING", requestId: req.requestId };
+      return {
+        status: req.status as "PENDING" | "CLAIMED" | "RUNNING",
+        requestId: req.requestId,
+      };
     }
-    if (req.status === "EXPIRED") return { status: "EXPIRED" as const, requestId: req.requestId };
+    if (req.status === "EXPIRED") {
+      return { status: "EXPIRED" as const, requestId: req.requestId };
+    }
 
     const res = await ctx.db
       .query("logResults")
       .withIndex("by_request", (q) => q.eq("requestId", a.requestId))
       .first();
 
-    // Collected: delete the buffer entry immediately.
+    // Deleted as part of consumption: at most one authenticated read.
     if (res) await ctx.db.delete(res._id);
 
     return {
@@ -362,6 +380,34 @@ export const readLogResult = mutation({
       truncated: res?.truncated ?? false,
       errorClass: req.errorClass ?? null,
       observedAt: res?.observedAt ?? null,
+    };
+  },
+});
+
+/** Polls request state without consuming anything. */
+export const logRequestStatus = query({
+  args: { requestId: v.string() },
+  handler: async (ctx, a) => {
+    await requireOwner(ctx);
+    const req = await ctx.db
+      .query("logRequests")
+      .withIndex("by_request", (q) => q.eq("requestId", a.requestId))
+      .first();
+    if (!req) return { status: "UNKNOWN" as const, requestId: a.requestId };
+    return {
+      status: req.status as
+        | "PENDING"
+        | "CLAIMED"
+        | "RUNNING"
+        | "COMPLETE"
+        | "FAILED"
+        | "EXPIRED"
+        | "UNKNOWN",
+      requestId: req.requestId,
+      errorClass: req.errorClass ?? null,
+      lineCount: req.lineCount ?? null,
+      byteCount: req.byteCount ?? null,
+      truncated: req.truncated ?? null,
     };
   },
 });
@@ -441,10 +487,16 @@ export async function purgeExpired(ctx: any) {
 // ---------------------------------------------------------------------------
 
 /**
- * Capabilities the ENROLLED AGENT advertised. Read from its own HelloAck,
- * recorded centrally, and never inferred from an agent version number.
+ * Capabilities the ENROLLED AGENT advertised in its own Hello.
+ *
+ * This is proof of BINARY support, and it is distinct from what a gateway
+ * granted. A Milestone A agent sends no `supported` field at all, so it reports
+ * an empty list and is correctly shown as NOT supporting docker.logs.read.
+ *
+ * Support is never inferred from an agent version, a hostname, or the
+ * gateway's own configuration.
  */
-export async function advertisedCapabilities(
+export async function agentSupported(
   ctx: any,
   serverPublicId: string,
 ): Promise<string[]> {
@@ -455,7 +507,25 @@ export async function advertisedCapabilities(
     )
     .order("desc")
     .first();
-  const caps = (row?.payload as any)?.capabilities;
+  const caps = (row?.payload as any)?.agentSupported;
+  return Array.isArray(caps) ? caps.filter((c: unknown) => typeof c === "string") : [];
+}
+
+/**
+ * The capability a gateway GRANTED, as echoed in the status channel.
+ */
+export async function grantedCeiling(
+  ctx: any,
+  serverPublicId: string,
+): Promise<string[]> {
+  const row = await ctx.db
+    .query("agentTelemetry")
+    .withIndex("by_server_kind", (q: any) =>
+      q.eq("serverPublicId", serverPublicId).eq("kind", "host"),
+    )
+    .order("desc")
+    .first();
+  const caps = (row?.payload as any)?.ceiling;
   return Array.isArray(caps) ? caps.filter((c: unknown) => typeof c === "string") : [];
 }
 

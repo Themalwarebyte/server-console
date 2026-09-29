@@ -64,6 +64,16 @@ export interface AgentView {
   certExpiringSoon: boolean;
   certExpired: boolean;
   inventorySource: string;
+  /** Capabilities the AGENT proved its binary supports. */
+  agentSupported?: string[];
+  /** Capabilities the GATEWAY granted. */
+  grantedCeiling?: string[];
+  /**
+   * Effective docker.logs.read: agent-proven AND granted AND centrally
+   * permitted AND the host is ONLINE. A gateway that merely wishes to grant it
+   * is not enough.
+   */
+  logReadAvailable?: boolean;
   agentVersion?: string;
   protocolVersion?: string;
   host?: Record<string, unknown> | null;

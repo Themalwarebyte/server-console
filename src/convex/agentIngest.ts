@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { HttpRouter } from "convex/server";
 import type { GenericMutationCtx } from "convex/server";
 import { requireOwner } from "./authz";
+import { agentSupported, grantedCeiling } from "./logAccess";
 import type { DataModel, Doc } from "./_generated/dataModel";
 
 /**
@@ -292,6 +293,39 @@ export const ingestAgentTelemetry = mutation({
 });
 
 /**
+ * The live container list for one host, taken from the most recent agent
+ * telemetry rather than the seeded inventory.
+ *
+ * The real Docker id matters: a log request targets an exact 64-character
+ * container id, and the control plane refuses a target that is not in this
+ * agent-reported set.
+ */
+export const liveContainers = query({
+  args: { serverPublicId: v.string() },
+  handler: async (ctx, a) => {
+    await requireOwner(ctx);
+    const row = await ctx.db
+      .query("agentTelemetry")
+      .withIndex("by_server_kind", (q) =>
+        q.eq("serverPublicId", a.serverPublicId).eq("kind", "docker"),
+      )
+      .order("desc")
+      .first();
+    if (!row) return [];
+    const payload = (row.payload as any) ?? {};
+    return (payload.containers ?? []) as {
+      id: string;
+      name: string;
+      image: string;
+      state: string;
+      healthCheckPresent?: boolean;
+      health?: string;
+      status?: string;
+    }[];
+  },
+});
+
+/**
  * Fleet view with derived agent health.
  *
  * Three states, and the distinction between them is the whole point:
@@ -315,6 +349,22 @@ export const listAgentStatus = query({
     await requireOwner(ctx);
     const servers = await ctx.db.query("servers").collect();
     const now = Date.now();
+
+    // Resolve the capability facts once per host, outside the projection, so
+    // the map stays synchronous and each list costs a single lookup.
+    const capabilityByHost = new Map<string, string[]>();
+    const grantedByHost = new Map<string, string[]>();
+    for (const s of servers) {
+      capabilityByHost.set(
+        s.publicId,
+        await agentSupported(ctx, s.publicId),
+      );
+      grantedByHost.set(s.publicId, await grantedCeiling(ctx, s.publicId));
+    }
+    const logReadAvailable = (id: string) =>
+      (capabilityByHost.get(id) ?? []).includes("docker.logs.read") &&
+      (grantedByHost.get(id) ?? []).includes("docker.logs.read") &&
+      process.env.CENTRAL_LOG_POLICY !== "deny";
 
     return servers.map((s) => {
       const enrolled = s.agentStatus === "enrolled";
@@ -369,6 +419,12 @@ export const listAgentStatus = query({
         // reporting. For an OFFLINE or DEGRADED host the caller must label any
         // figure as stale rather than current.
         inventorySource: s.inventorySource ?? "demo",
+        // Effective capability: the agent must PROVE its binary supports it AND
+        // central policy must permit it. A gateway that merely wishes to grant
+        // a capability is not enough, so an older agent stays unsupported.
+        agentSupported: capabilityByHost.get(s.publicId) ?? [],
+        grantedCeiling: grantedByHost.get(s.publicId) ?? [],
+        logReadAvailable: logReadAvailable(s.publicId) && state === "ONLINE",
       };
     });
   },

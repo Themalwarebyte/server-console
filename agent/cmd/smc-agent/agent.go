@@ -152,13 +152,24 @@ func (a *agent) applyCeiling(ack *smcv1.HelloAck) {
 
 func (a *agent) sendHello() {
 	fp := a.certFingerprint()
-	log.Printf("hello serverPublicId=%s cert=%s", a.id, fp)
+	// Capabilities this binary ACTUALLY implements, not what a gateway may
+	// grant. The helper enforces each of these independently on a closed
+	// switch, so this is a statement about the binary rather than a permission.
+	// A Milestone A binary has no such field and therefore advertises nothing,
+	// which is how the control plane knows it cannot serve logs.
+	supported := []string{
+		"host.telemetry.read",
+		"docker.telemetry.read",
+		"docker.logs.read",
+	}
+	log.Printf("hello serverPublicId=%s cert=%s supported=%v", a.id, fp, supported)
 	_ = a.send(&smcv1.AgentMessage{Payload: &smcv1.AgentMessage_Hello{
 		Hello: &smcv1.Hello{
 			ServerPublicId:   a.id,
 			AgentVersion:     a.version,
 			ProtocolVersion:  a.proto,
 			CertFingerprint:  fp,
+			Supported:        supported,
 		},
 	}})
 }
