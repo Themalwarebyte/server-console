@@ -1,15 +1,82 @@
 # Real-Time Agent Implementation Plan
 
-**Status:** Milestone A APPROVED for implementation. Decisions below are binding.
-**Date:** 2026-09-27
+**Status:** Milestone A **and A.1 (health monitoring)** implemented and live.
+**Date:** 2026-09-27 (A.1 landed 2026-09-29, commit `e83c2bb`)
 **Milestone:** V0.1 = real-time, agent-based management of SERVER-01 and SERVER-02
-**Companion:** `docs/SERVER02_DEPLOYMENT_DESIGN.md`, `docs/SERVER02_RUNBOOK.md`
+**Companion:** `docs/SERVER02_DEPLOYMENT_DESIGN.md`, `docs/SERVER02_RUNBOOK.md`,
+`docs/AGENT_PKI.md`, `docs/MILESTONE_B_CONTAINER_LOGS_DESIGN.md`
 
 > The operator-snapshot model shipped in `d468fcc` is retained as bootstrap and
 > fallback data only. It is not the V0.1 operating model. Agents replace it once
 > enrolled, and the UI stops showing snapshot values for enrolled hosts.
 
 ---
+
+## 0.5 AGENT HEALTH MODEL (Milestone A.1 — implemented)
+
+Health is derived **in the control plane**, never guessed in the browser. Three
+states, and the distinction between them is the point:
+
+| State | Condition |
+|---|---|
+| `ONLINE` | heartbeat within **45 s** AND telemetry within **30 s** AND gateway connected AND zero errors |
+| `DEGRADED` | heartbeat fresh, but telemetry stale, gateway disconnected, or errors recorded |
+| `OFFLINE` | heartbeat timeout exceeded, or no agent enrolled |
+
+**Why telemetry freshness is separate from the heartbeat.** Host telemetry
+arrives every 5 s and Docker telemetry every 10 s. A host can be perfectly
+reachable while its helper is failing, the agent cannot reach the socket, or
+gateway ingest is rejecting — and all three look identical if you only watch the
+heartbeat. Before A.1 that gap rendered as a skeleton that never resolved.
+
+**Thresholds** live in `src/convex/agentIngest.ts` as named constants
+(`OFFLINE_AFTER_MS = 45_000`, `TELEMETRY_STALE_MS = 30_000`,
+`CERT_WARN_DAYS = 30`).
+
+### Tracked fields
+
+| Field | Meaning |
+|---|---|
+| `lastHeartbeatAt` | Most recent agent heartbeat |
+| `lastSuccessfulTelemetryAt` | Most recent telemetry the gateway actually ingested |
+| `agentErrorCount` | Errors **since the last successful telemetry**; reset to 0 on success |
+| `lastErrorClass` | Sanitised class only |
+| `gatewayState` | `connected` / `disconnected` |
+| `certNotAfter` | Leaf certificate expiry |
+| `agentHealthEvents` | Append-only connect / disconnect / error trail |
+
+### Certificate expiry is recorded by the control plane
+
+Expiry is a property of the certificate the control plane issued, so the gateway
+reports the leaf's `NotAfter` as a **date** on the existing `status` channel and
+Convex stores it. This means the expiry warning required **no agent or helper
+rebuild** and **no protocol change** — the agent binaries on both hosts are
+byte-identical to Milestone A.
+
+### Security posture
+
+- `listAgentStatus` returns **no certificate material**: `certFingerprint` and
+  `certSerial` are deliberately omitted. Only the expiry is exposed, which is all
+  the UI needs to render a warning.
+- Errors are a **class**, not a message. Unrecognised values collapse to
+  `unknown` at the ingest boundary, so an upstream message, path, or stack trace
+  can never reach the database or the UI.
+- The user-facing failure state stays generic: **"Cannot reach the control
+  plane"**, with no backend detail.
+
+### UI behaviour
+
+| Situation | What the console shows |
+|---|---|
+| `ONLINE` | Live badge, heartbeat age, telemetry age, live figures |
+| `DEGRADED` | Amber badge, error count and class, figures explicitly marked **stale** |
+| `OFFLINE` | Red badge, last-seen time, **live figures withheld** |
+| Not enrolled | Snapshot, explicitly labelled a point-in-time observation |
+
+Stale figures are never silently replaced by snapshot data for an enrolled host.
+
+---
+
 
 ## 0. APPROVED OWNER DECISIONS (binding — these supersede §2, §3, §9, §17)
 
