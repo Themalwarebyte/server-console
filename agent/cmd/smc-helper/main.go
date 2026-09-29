@@ -60,8 +60,8 @@ func main() {
 	if err := os.Chown(sockPath, 0, agentGID()); err != nil {
 		log.Printf("warn: chown %s: %v", sockPath, err)
 	}
-	log.Printf("listening on %s (read-only operations: %s, %s)",
-		sockPath, ipc.OpHostTelemetry, ipc.OpDockerTelemetry)
+	log.Printf("listening on %s (read-only operations: %s, %s, %s)",
+		sockPath, ipc.OpHostTelemetry, ipc.OpDockerTelemetry, ipc.OpContainerLogs)
 
 	col := newCollector()
 

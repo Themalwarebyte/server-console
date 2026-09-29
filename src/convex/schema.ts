@@ -62,6 +62,11 @@ const schema = defineSchema(
       lastErrorClass: v.optional(v.string()),
       // Gateway-side view of the agent stream: connected | disconnected.
       gatewayState: v.optional(v.string()),
+      // What the AGENT binary proved it implements. Absent means an agent that
+      // does not advertise support, e.g. the Milestone A binary.
+      agentSupported: v.optional(v.array(v.string())),
+      // What the GATEWAY granted. A grant is not proof of support.
+      grantedCeiling: v.optional(v.array(v.string())),
       // Certificate expiry, recorded by the control plane at enrollment rather
       // than reported by the agent, so surfacing it needs no protocol change.
       certNotAfter: v.optional(v.number()),

@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"flag"
+	"io"
 	"fmt"
 	"log"
 	"os"
@@ -79,6 +80,13 @@ func main() {
 	}
 
 	if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		// A planned stop closes the stream, which surfaces as EOF. That is a
+		// normal shutdown, not a failure, so the agent exits 0 and the unit does
+		// not report FAILED on every restart.
+		if errors.Is(err, io.EOF) {
+			log.Print("agent stopped")
+			return
+		}
 		log.Fatalf("agent stopped: %v", err)
 	}
 }

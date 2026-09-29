@@ -500,15 +500,11 @@ export async function agentSupported(
   ctx: any,
   serverPublicId: string,
 ): Promise<string[]> {
-  const row = await ctx.db
-    .query("agentTelemetry")
-    .withIndex("by_server_kind", (q: any) =>
-      q.eq("serverPublicId", serverPublicId).eq("kind", "host"),
-    )
-    .order("desc")
+  const s = await ctx.db
+    .query("servers")
+    .withIndex("by_public_id", (q: any) => q.eq("publicId", serverPublicId))
     .first();
-  const caps = (row?.payload as any)?.agentSupported;
-  return Array.isArray(caps) ? caps.filter((c: unknown) => typeof c === "string") : [];
+  return s?.agentSupported ?? [];
 }
 
 /**
@@ -518,15 +514,11 @@ export async function grantedCeiling(
   ctx: any,
   serverPublicId: string,
 ): Promise<string[]> {
-  const row = await ctx.db
-    .query("agentTelemetry")
-    .withIndex("by_server_kind", (q: any) =>
-      q.eq("serverPublicId", serverPublicId).eq("kind", "host"),
-    )
-    .order("desc")
+  const s = await ctx.db
+    .query("servers")
+    .withIndex("by_public_id", (q: any) => q.eq("publicId", serverPublicId))
     .first();
-  const caps = (row?.payload as any)?.ceiling;
-  return Array.isArray(caps) ? caps.filter((c: unknown) => typeof c === "string") : [];
+  return s?.grantedCeiling ?? [];
 }
 
 async function currentActor(ctx: any): Promise<string | null> {

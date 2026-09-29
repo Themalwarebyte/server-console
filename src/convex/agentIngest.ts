@@ -226,14 +226,38 @@ export const ingestAgentTelemetry = mutation({
     if (a.kind === "status") {
       const connected = a.payload?.state === "connected";
       // The gateway reports the leaf certificate's expiry. It is recorded as a
-      // date only, so the UI can warn about expiry without the control plane
-      // ever storing or exposing certificate material.
+      // date only, so the UI can warn without the control plane ever storing
+      // or exposing certificate material.
       const na = a.payload?.certNotAfterMs;
       const notAfter =
         typeof na === "number" && Number.isFinite(na) && na > 0 ? na : undefined;
+      // Capability facts are stored HERE, on the server document, rather than
+      // only in the status payload. The control plane reads them from here:
+      //   agentSupported - what the agent binary proved it implements
+      //   grantedCeiling  - what the gateway granted
+      // Neither is inferable from the other, and neither is derived from a
+      // version string or a hostname.
+      // The gateway sends `ceiling` as [{code:...}] (protobuf Capability
+      // objects) and `agentSupported` as ["..."] (plain strings). Both shapes
+      // are normalised here rather than assuming one of them.
+      const toCodes = (v: unknown): string[] | undefined => {
+        if (!Array.isArray(v)) return undefined;
+        const out: string[] = [];
+        for (const item of v) {
+          if (typeof item === "string") out.push(item);
+          else if (item && typeof item === "object" && typeof (item as any).code === "string") {
+            out.push((item as any).code);
+          }
+        }
+        return out;
+      };
+      const sup = toCodes(a.payload?.agentSupported);
+      const ceil = toCodes(a.payload?.ceiling);
       await ctx.db.patch(server._id, {
         gatewayState: connected ? "connected" : "disconnected",
         ...(notAfter ? { certNotAfter: notAfter } : {}),
+        ...(sup ? { agentSupported: sup } : {}),
+        ...(ceil ? { grantedCeiling: ceil } : {}),
       });
       await ctx.db.insert("agentHealthEvents", {
         serverPublicId: a.serverPublicId,

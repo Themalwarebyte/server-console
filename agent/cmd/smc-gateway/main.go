@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -45,8 +46,12 @@ var (
 	serverCert   = flag.String("cert", "/etc/smc-gateway/tls/gateway.crt", "gateway server certificate")
 	serverKey    = flag.String("key", "/etc/smc-gateway/tls/gateway.key", "gateway server private key")
 	caFile       = flag.String("ca", "/etc/smc-gateway/tls/agents-ca.crt", "CA bundle for verifying agents")
+	// Function invocations (claim / complete) must go to the Convex CLIENT
+	// port. The ingest endpoint is an httpAction on the SITE port, so this
+	// cannot be derived from it.
+	convexMutURL = flag.String("convex-mutation-url", "", "Convex /api/mutation URL on the client port")
 	ingestURL    = flag.String("ingest-url", "https://gman-02.tail0ab69b.ts.net:8443/api/smc/ingest", "narrow Convex ingest endpoint")
-	logSecret    = flag.String("log-secret-file", "/etc/smc-gateway/log.secret", "DEDICATED log-request credential")
+	logSecret    = flag.String("log-secret-file", "", "log-work credential path; defaults to $CREDENTIALS_DIRECTORY/log-secret")
 	ingestSecret = flag.String("ingest-secret-file", "/etc/smc-gateway/ingest.secret", "gateway service credential")
 
 	// Milestone A ceiling. Only these two are granted, and the local ceiling is
@@ -127,7 +132,18 @@ func main() {
 		log.Fatalf("refusing to start: %v", err)
 	}
 
-	logSec, err := os.ReadFile(*logSecret)
+	// The log-work credential is delivered by systemd LoadCredential=, which
+	// places it in a root-owned, service-private directory. The value is never
+	// passed in ExecStart, never in Environment=, and never logged.
+	logSecretPath := *logSecret
+	if logSecretPath == "" {
+		if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
+			logSecretPath = filepath.Join(d, "log-secret")
+		} else {
+			logSecretPath = "/etc/smc-gateway/log.secret"
+		}
+	}
+	logSec, err := os.ReadFile(logSecretPath)
 	if err != nil {
 		log.Printf("log-request credential unavailable: %v", err)
 	}
@@ -153,7 +169,7 @@ func main() {
 	svc := &svc{
 		reg:            reg,
 		ingest:          newIngest(*ingestURL, trimSpace(secret)),
-		convexMutationURL: strings.TrimSuffix(*ingestURL, "/api/smc/ingest") + "/api/mutation",
+		convexMutationURL: *convexMutURL,
 		logSecret:       trimSpace(logSec),
 		client:          &http.Client{Timeout: 20 * time.Second},
 	}
