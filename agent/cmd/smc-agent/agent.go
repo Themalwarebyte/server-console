@@ -38,6 +38,16 @@ type agent struct {
 
 	ceiling map[string]bool
 
+	// ---- log request enforcement (Milestone B) ----
+	// nonces rejects replayed envelopes within nonceWindow.
+	nonces *nonceSet
+	// logSlots bounds concurrent reads held by this agent.
+	logSlots chan struct{}
+	// rate is a fixed per-minute counter.
+	rate logRate
+	// epoch is the highest management epoch this agent has observed.
+	epoch atomic.Int64
+
 	// lastHost backs the CPU delta across samples.
 	lastHostCPU float64
 	lastHostTS  time.Time
@@ -104,6 +114,17 @@ func (a *agent) receive(ctx context.Context) {
 			a.applyCeiling(p.HelloAck)
 		case *smcv1.GatewayMessage_Ping:
 			log.Printf("ping from gateway")
+		case *smcv1.GatewayMessage_Log:
+			// A log read is validated and executed on this host, then relayed
+			// back on the same stream. The result is never buffered here.
+			m := p.Log
+			go func() {
+				res := a.handleLogRequest(ctx, m)
+				_ = a.send(&smcv1.AgentMessage{
+					Payload: &smcv1.AgentMessage_LogResult{LogResult: res},
+				})
+			}()
+
 		case *smcv1.GatewayMessage_Action:
 			// Milestone A ceiling is read-only, so an action can never be
 			// authorised. It is refused and the refusal is reported.

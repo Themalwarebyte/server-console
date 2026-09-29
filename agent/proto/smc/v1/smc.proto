@@ -27,6 +27,7 @@ message AgentMessage {
     DockerEvent event = 5;
     ActionAck ack = 6;
     ActionResult result = 7;
+    LogRequestResult logResult = 8;
   }
 }
 
@@ -35,6 +36,7 @@ message GatewayMessage {
     HelloAck hello_ack = 1;
     Ping ping = 2;
     Action action = 3;
+    LogRequest log = 4;
   }
 }
 
@@ -199,4 +201,39 @@ message Action {
   string risk_class = 10;
   string requested_by = 11;
   string gateway_signature = 12;
+}
+
+// ------------------------------------------------------------------ Milestone B
+// Read-only container log access. Deliberately separate from Action so a read can
+// never be mistaken for a mutation in the ledger or in a capability check.
+
+message LogLine {
+  int64 timestamp_ms = 1;   // 0 when timestamps were not requested
+  string text = 2;          // redacted on the host; control characters stripped
+}
+
+// Gateway -> Agent
+message LogRequest {
+  string request_id = 1;
+  string server_public_id = 2;  // must equal the agent's certificate identity
+  string container_id = 3;      // exact id; the helper rejects anything else
+  int32 tail = 4;
+  bool timestamps = 5;
+  int64 issued_at_ms = 6;
+  int64 expires_at_ms = 7;
+  string nonce = 8;             // single use
+  int64 management_epoch = 9;    // refuses envelopes minted under an older policy
+  string gateway_signature = 10;
+}
+
+// Agent -> Gateway
+message LogRequestResult {
+  string request_id = 1;
+  string server_public_id = 2;
+  bool ok = 3;
+  string error = 4;             // sanitised class only, never a Docker error string
+  repeated LogLine lines = 5;
+  bool truncated = 6;           // true when a cap was reached
+  int64 observed_at_ms = 7;
+  int64 duration_ms = 8;
 }

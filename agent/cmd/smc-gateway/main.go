@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +46,7 @@ var (
 	serverKey    = flag.String("key", "/etc/smc-gateway/tls/gateway.key", "gateway server private key")
 	caFile       = flag.String("ca", "/etc/smc-gateway/tls/agents-ca.crt", "CA bundle for verifying agents")
 	ingestURL    = flag.String("ingest-url", "https://gman-02.tail0ab69b.ts.net:8443/api/smc/ingest", "narrow Convex ingest endpoint")
+	logSecret    = flag.String("log-secret-file", "/etc/smc-gateway/log.secret", "DEDICATED log-request credential")
 	ingestSecret = flag.String("ingest-secret-file", "/etc/smc-gateway/ingest.secret", "gateway service credential")
 
 	// Milestone A ceiling. Only these two are granted, and the local ceiling is
@@ -51,6 +54,10 @@ var (
 	ceiling = map[string]bool{
 		"host.telemetry.read":   true,
 		"docker.telemetry.read": true,
+	// Milestone B: read-only logs. Mutation capabilities are absent and stay
+	// absent; nothing here can authorise a start, stop, restart, reboot or
+	// shutdown.
+	"docker.logs.read": true,
 	}
 )
 
@@ -60,6 +67,8 @@ type agentSession struct {
 	CertSerial   string
 	AgentVersion string
 	ConnectedAt  time.Time
+	// out carries dispatch messages to the connected agent.
+	out          chan *smcv1.GatewayMessage
 	LastSeen     atomic.Int64
 	Active       atomic.Bool
 }
@@ -115,6 +124,10 @@ func main() {
 		log.Fatalf("refusing to start: %v", err)
 	}
 
+	logSec, err := os.ReadFile(*logSecret)
+	if err != nil {
+		log.Printf("log-request credential unavailable: %v", err)
+	}
 	secret, err := os.ReadFile(*ingestSecret)
 	if err != nil {
 		log.Fatalf("read ingest credential: %v", err)
@@ -134,13 +147,28 @@ func main() {
 		grpc.MaxSendMsgSize(8<<20),
 	)
 	reg := newRegistry()
-	smcv1.RegisterAgentChannelServer(srv, &svc{reg: reg, ingest: newIngest(*ingestURL, trimSpace(secret))})
+	svc := &svc{
+		reg:            reg,
+		ingest:          newIngest(*ingestURL, trimSpace(secret)),
+		convexMutationURL: strings.TrimSuffix(*ingestURL, "/api/smc/ingest") + "/api/mutation",
+		logSecret:       trimSpace(logSec),
+		client:          &http.Client{Timeout: 20 * time.Second},
+	}
+	smcv1.RegisterAgentChannelServer(srv, svc)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {
 		<-ctx.Done()
 		srv.GracefulStop()
+	}()
+
+	go svc.logPollLoop(ctx)
+
+	go func() {
+		pctx, pcancel := context.WithCancel(context.Background())
+		defer pcancel()
+		svc.logPollLoop(pctx)
 	}()
 
 	log.Printf("listening on %s (mTLS, agent CA trust, no Docker socket, no host execution)", *listenAddr)
@@ -173,6 +201,16 @@ type svc struct {
 	smcv1.UnimplementedAgentChannelServer
 	reg   *registry
 	ingest *ingest
+
+	// ---- Milestone B ----
+	// convexMutationURL is the Convex HTTP mutation API root. Claim and
+	// complete are MUTATIONS, so they must not be posted to /api/query.
+	convexMutationURL string
+	// logSecret is the DEDICATED log-request credential. It is never the
+	// telemetry ingest secret, so a compromised ingest path cannot fetch
+	// pending requests.
+	logSecret string
+	client     *http.Client
 }
 
 // Connect accepts exactly one long-lived, agent-initiated stream.
@@ -190,6 +228,7 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 		Fingerprint: fp,
 		CertSerial:  serial,
 		ConnectedAt: time.Now(),
+		out:         make(chan *smcv1.GatewayMessage, 8),
 	}
 	ses.Active.Store(true)
 	ses.LastSeen.Store(time.Now().UnixMilli())
@@ -265,6 +304,9 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 		log.Printf("ingest event: %v", err)
 			}
 
+		case *smcv1.AgentMessage_LogResult:
+			go s.reportLogAgentResult(stream.Context(), p.LogResult)
+
 		case *smcv1.AgentMessage_Ack, *smcv1.AgentMessage_Result:
 			// Milestone A never dispatches actions, so these are unexpected.
 			log.Printf("received an action outcome that Milestone A cannot have issued")
@@ -283,6 +325,10 @@ func (s *svc) reportStatus(id, fp, serial, state, agentVersion, protoVersion str
 		// Leaf certificate expiry, as a date. The control plane records it so
 		// the UI can warn; no certificate material leaves the gateway.
 		"certNotAfterMs": notAfterMs,
+		// The capability ceiling this gateway granted to the host, echoed back
+		// so the control plane knows exactly what each host supports. Support
+		// is never inferred from an agent version number.
+		"capabilities": ceilingList(),
 	})
 }
 
@@ -347,6 +393,7 @@ func ceilingList() []*smcv1.Capability {
 	for code := range ceiling {
 		out = append(out, &smcv1.Capability{Code: code})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].GetCode() < out[j].GetCode() })
 	return out
 }
 

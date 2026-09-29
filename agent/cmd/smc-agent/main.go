@@ -167,7 +167,9 @@ func run(ctx context.Context) error {
 	}
 
 	a := &agent{
-		id:      *serverID,
+		nonces:   newNonceSet(),
+		logSlots: make(chan struct{}, maxLogRequestsInFlight),
+		id:       *serverID,
 		version: version,
 		proto:   protoVersion,
 		helper:   helperclient.New(""),

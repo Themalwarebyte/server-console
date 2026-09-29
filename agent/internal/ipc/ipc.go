@@ -10,15 +10,38 @@
 // arbitrary selectors and arbitrary Docker API paths.
 package ipc
 
-// Operation names. This list is the entire Milestone A surface.
+// Operation names. This list is the entire Milestone B surface.
+//
+// containerLogs is READ-ONLY and takes an exact container id. There is no
+// name matching, no prefix, no regex, no glob, and no "all containers". There is
+// no follow parameter, so no unbounded stream is reachable even by a hostile
+// caller. Mutation operations are deliberately absent; when they are added in
+// Milestone C they land as separate named operations, never as a parameter here,
+// so any widening of this surface is visible in review.
 const (
-	OpHostTelemetry    = "hostTelemetry"
-	OpDockerTelemetry  = "dockerTelemetry"
+	OpHostTelemetry   = "hostTelemetry"
+	OpDockerTelemetry = "dockerTelemetry"
+	OpContainerLogs   = "containerLogs"
+)
+
+// Milestone B limits. These are the ceilings, not merely the defaults: a caller
+// asking for more is clamped, and exceeding the byte cap truncates rather than
+// failing.
+const (
+	MaxLogLines     = 500
+	MaxLogBytes     = 256 * 1024
+	MaxLogLineBytes = 4 * 1024
+	MaxLogTail      = 500
 )
 
 // Request is one newline-delimited JSON request over the Unix socket.
 type Request struct {
 	Op string `json:"op"`
+
+	// containerLogs parameters. ContainerID must be an exact Docker id.
+	ContainerID string `json:"containerId,omitempty"`
+	Tail        int    `json:"tail,omitempty"`
+	Timestamps  bool   `json:"timestamps,omitempty"`
 }
 
 // Response is one newline-delimited JSON response.
@@ -26,10 +49,27 @@ type Request struct {
 // Milestone A never returns an error to the agent that would contain host
 // detail it should not see; failures are reported by class only.
 type Response struct {
-	OK  bool            `json:"ok"`
-	Err string          `json:"err,omitempty"`
-	Host *HostTelemetry `json:"host,omitempty"`
+	OK    bool              `json:"ok"`
+	Err   string            `json:"err,omitempty"`
+	Host  *HostTelemetry    `json:"host,omitempty"`
 	Docker *DockerTelemetry `json:"docker,omitempty"`
+	Logs  *LogResponse      `json:"logs,omitempty"`
+}
+
+// LogResponse is a bounded, redacted container log tail.
+type LogResponse struct {
+	ContainerID string     `json:"containerId"`
+	Lines       []LogLine  `json:"lines"`
+	Truncated   bool       `json:"truncated"`
+	TotalBytes  int        `json:"totalBytes"`
+	DurationMs  int64      `json:"durationMs"`
+}
+
+// LogLine is one redacted line. TimestampMs is 0 when timestamps were not
+// requested. Text has ANSI and control characters removed.
+type LogLine struct {
+	TimestampMs int64  `json:"timestampMs"`
+	Text        string `json:"text"`
 }
 
 // Mount is a filesystem usage record.

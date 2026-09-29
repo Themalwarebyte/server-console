@@ -255,9 +255,71 @@ const schema = defineSchema(
         .index("by_server_kind", ["serverPublicId", "kind"])
         .index("by_server", ["serverPublicId"]),
 
-      /** Lifecycle events observed by an agent, kept separate from samples. */
-      agentEvents: defineTable({
+      /**
+       * Log work items: METADATA AND COORDINATION ONLY. Never log content.
+       *
+       * One row per requested read. The claim lease is a random token minted
+       * centrally when the gateway claims the work; it is required to complete
+       * the request and is never exposed to the browser.
+       */
+      logRequests: defineTable({
+        requestId: v.string(),
         serverPublicId: v.string(),
+        containerId: v.string(),
+        // Snapshot at request time, for display. Never trusted for targeting.
+        containerName: v.optional(v.string()),
+        // Session-derived actor. Never taken from the request body.
+        requestedBy: v.string(),
+        // PENDING | CLAIMED | RUNNING | COMPLETE | FAILED | EXPIRED
+        status: v.string(),
+        issuedAt: v.number(),
+        expiresAt: v.number(),
+        managementEpoch: v.number(),
+        requestedTail: v.number(),
+        timestamps: v.boolean(),
+        nonce: v.string(),
+        // Set when claimed; the lease the gateway must present to complete.
+        claimLease: v.optional(v.string()),
+        claimedAt: v.optional(v.number()),
+        completedAt: v.optional(v.number()),
+        // Result metadata only, no content.
+        lineCount: v.optional(v.number()),
+        byteCount: v.optional(v.number()),
+        truncated: v.optional(v.boolean()),
+        // Sanitised class only; never a raw error string.
+        errorClass: v.optional(v.string()),
+      })
+        .index("by_request", ["requestId"])
+        .index("by_status", ["status"])
+        .index("by_expiry", ["expiresAt"]),
+
+      /**
+       * TEMPORARY BOUNDED DELIVERY BUFFER.
+       *
+       * The browser cannot contact the gateway directly, so a completed read
+       * has to be held centrally for the browser to collect. It is not an
+       * archive: rows are capped at 256 KiB, retained for at most 2 minutes,
+       * and deleted on read or automatically at expiry. There is NO persistent
+       * log retention and no log-content analytics.
+       */
+      logResults: defineTable({
+        requestId: v.string(),
+        serverPublicId: v.string(),
+        ok: v.boolean(),
+        lines: v.array(v.object({ ts: v.number(), text: v.string() })),
+        lineCount: v.number(),
+        byteCount: v.number(),
+        truncated: v.boolean(),
+        errorClass: v.optional(v.string()),
+        observedAt: v.number(),
+        // Hard retention: at most 2 minutes from completion.
+        expiresAt: v.number(),
+      })
+        .index("by_request", ["requestId"])
+        .index("by_expiry", ["expiresAt"]),
+
+      /** Lifecycle events observed by an agent, kept separate from samples. */
+      agentEvents: defineTable({        serverPublicId: v.string(),
         observedAtMs: v.number(),
         kind: v.string(),
         containerId: v.optional(v.string()),

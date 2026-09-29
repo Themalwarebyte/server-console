@@ -29,6 +29,23 @@ type Client struct {
 	Timeout time.Duration
 }
 
+// ContainerLogs performs a read-only, bounded, redacted log tail for one exact
+// container id.
+//
+// The helper owns the exact-id rule and the redaction. The agent deliberately
+// does NOT pre-validate the target, so that rule has exactly one home and
+// cannot drift between the two.
+func (c *Client) ContainerLogs(ctx context.Context, req ipc.Request) (*ipc.LogResponse, error) {
+	resp, err := c.call(ctx, req.Op)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK || resp.Logs == nil {
+		return nil, unavailableError(resp.Err)
+	}
+	return resp.Logs, nil
+}
+
 func New(socket string) *Client {
 	if socket == "" {
 		socket = DefaultSocket

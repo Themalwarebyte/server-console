@@ -172,6 +172,7 @@ func (c *collector) serve(ctx context.Context, conn net.Conn) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	logStart := time.Now()
 
 	switch req.Op {
 	case ipc.OpHostTelemetry:
@@ -193,6 +194,18 @@ func (c *collector) serve(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeJSON(conn, ipc.Response{OK: true, Docker: d})
+
+	case ipc.OpContainerLogs:
+		// Read-only. The exact-64-hex-id check lives in containerLogs, so a
+		// name, prefix, regex, glob or "all containers" is refused before
+		// Docker is ever consulted. There is no follow parameter at all.
+		l, err := c.dc.containerLogs(ctx, req)
+		if err != nil || l == nil {
+			writeJSON(conn, ipc.Response{OK: false, Err: "logs unavailable"})
+			return
+		}
+		l.DurationMs = time.Since(logStart).Milliseconds()
+		writeJSON(conn, ipc.Response{OK: true, Logs: l})
 
 	default:
 		// Milestone A has no other operation. Unknown ops are refused outright.
