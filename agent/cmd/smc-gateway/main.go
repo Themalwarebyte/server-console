@@ -1,4 +1,4 @@
-﻿// Command smc-gateway is the agent control plane on SERVER-02.
+// Command smc-gateway is the agent control plane on SERVER-02.
 //
 // It terminates mTLS, derives each agent's identity from its verified client
 // certificate, and forwards telemetry into the control plane through a narrow
@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -178,7 +179,7 @@ type svc struct {
 func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 	// Identity comes from the verified client certificate. It is never taken
 	// from a payload field.
-	id, fp, serial, err := peerIdentity(stream.Context())
+	id, fp, serial, notAfterMs, err := peerIdentity(stream.Context())
 	if err != nil {
 		log.Printf("rejecting stream: %v", err)
 		return status.Error(codes.Unauthenticated, "client certificate identity could not be established")
@@ -194,9 +195,14 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 	ses.LastSeen.Store(time.Now().UnixMilli())
 	s.reg.bind(ses)
 	log.Printf("agent connected: serverPublicId=%s cert=%s serial=%s", id, short(fp), serial)
+	// Health signal on the same authenticated channel: a connection is a state
+	// change the control plane needs, and it is not telemetry. The agent version
+	// is not known until Hello arrives, so it is filled in there.
+	go s.reportStatus(id, fp, serial, "connected", "", "", notAfterMs)
 	defer func() {
 		ses.Active.Store(false)
 		log.Printf("agent disconnected: serverPublicId=%s", id)
+		go s.reportStatus(id, fp, serial, "disconnected", "", "", notAfterMs)
 	}()
 
 	if err := stream.Send(&smcv1.GatewayMessage{Payload: &smcv1.GatewayMessage_HelloAck{
@@ -241,19 +247,22 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 			// so a payload can never attribute telemetry to another host.
 			p.Host.ServerPublicId = id
 			if err := s.ingest.push("host", id, fp, serial, p.Host.ObservedAtMs, p.Host); err != nil {
-				log.Printf("ingest host: %v", err)
+				s.reportIngestError(id, fp, serial, "host", err)
+		log.Printf("ingest host: %v", err)
 			}
 
 		case *smcv1.AgentMessage_Docker:
 			p.Docker.ServerPublicId = id
 			if err := s.ingest.push("docker", id, fp, serial, p.Docker.ObservedAtMs, p.Docker); err != nil {
-				log.Printf("ingest docker: %v", err)
+				s.reportIngestError(id, fp, serial, "docker", err)
+		log.Printf("ingest docker: %v", err)
 			}
 
 		case *smcv1.AgentMessage_Event:
 			p.Event.ServerPublicId = id
 			if err := s.ingest.push("event", id, fp, serial, p.Event.ObservedAtMs, p.Event); err != nil {
-				log.Printf("ingest event: %v", err)
+				s.reportIngestError(id, fp, serial, "event", err)
+		log.Printf("ingest event: %v", err)
 			}
 
 		case *smcv1.AgentMessage_Ack, *smcv1.AgentMessage_Result:
@@ -263,19 +272,54 @@ func (s *svc) Connect(stream smcv1.AgentChannel_ConnectServer) error {
 	}
 }
 
+// reportStatus publishes a connection-state change to the control plane over the
+// existing authenticated ingest endpoint. No new channel, credential, or
+// listener is involved.
+func (s *svc) reportStatus(id, fp, serial, state, agentVersion, protoVersion string, notAfterMs int64) {
+	_ = s.ingest.push("status", id, fp, serial, time.Now().UnixMilli(), map[string]any{
+		"state":           state,
+		"agentVersion":    agentVersion,
+		"protocolVersion": protoVersion,
+		// Leaf certificate expiry, as a date. The control plane records it so
+		// the UI can warn; no certificate material leaves the gateway.
+		"certNotAfterMs": notAfterMs,
+	})
+}
+
+// reportIngestError records a failure as a class, never as a message. The raw
+// error text frequently contains URLs, request ids, and identifiers, so it is
+// logged for the operator and deliberately not forwarded.
+func (s *svc) reportIngestError(id, fp, serial, kind string, err error) {
+	class := "ingest_rejected"
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "401") || strings.Contains(msg, "unauthorized"):
+			class = "ingest_rejected"
+		case strings.Contains(msg, "x509") || strings.Contains(msg, "certificate"):
+			class = "identity_mismatch"
+		case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline"):
+			class = "helper_timeout"
+		}
+	}
+	_ = s.ingest.push("error", id, fp, serial, time.Now().UnixMilli(), map[string]any{
+		"errorClass": class,
+		"kind":       kind,
+	})
+}
 // peerIdentity extracts the agent's immutable identity from the verified
 // client certificate, plus the fingerprint and serial for the audit trail.
-func peerIdentity(ctx context.Context) (id, fingerprint, serial string, err error) {
+func peerIdentity(ctx context.Context) (id, fingerprint, serial string, notAfterMs int64, err error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		return "", "", "", errors.New("no peer information")
+		return "", "", "", 0, errors.New("no peer information")
 	}
 	ti, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		return "", "", "", errors.New("transport is not TLS")
+		return "", "", "", 0, errors.New("transport is not TLS")
 	}
 	if len(ti.State.PeerCertificates) == 0 {
-		return "", "", "", errors.New("no client certificate presented")
+		return "", "", "", 0, errors.New("no client certificate presented")
 	}
 	leaf := ti.State.PeerCertificates[0]
 
@@ -288,14 +332,14 @@ func peerIdentity(ctx context.Context) (id, fingerprint, serial string, err erro
 			}
 		}
 		if !clientAuth {
-			return "", "", "", errors.New("certificate is not valid for clientAuth")
+			return "", "", "", 0, errors.New("certificate is not valid for clientAuth")
 		}
 	}
 	id, ok = agentid.ServerIDFromCert(leaf)
 	if !ok {
-		return "", "", "", errors.New("certificate has no smc URI SAN identity")
+		return "", "", "", 0, errors.New("certificate has no smc URI SAN identity")
 	}
-	return id, agentid.Fingerprint(leaf.Raw), leaf.SerialNumber.String(), nil
+	return id, agentid.Fingerprint(leaf.Raw), leaf.SerialNumber.String(), leaf.NotAfter.UnixMilli(), nil
 }
 
 func ceilingList() []*smcv1.Capability {

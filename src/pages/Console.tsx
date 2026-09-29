@@ -17,7 +17,12 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
-import { AgentBadge, LiveMetrics, useAgentViews } from "@/components/console/AgentStatus";
+import {
+  AgentBadge,
+  AgentHealthLine,
+  LiveMetrics,
+  useAgentViews,
+} from "@/components/console/AgentStatus";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -230,8 +235,22 @@ function ConsoleInner() {
             const diskPct = (s.hardware.diskUsedGb / s.hardware.diskGb) * 100;
               const agentView =
                 agentViews?.find((a) => a.serverPublicId === s.publicId) ?? {
-                  serverPublicId: s.publicId,
-                  enrolled: false, online: false, lastHeartbeatAt: null, lastObservedAt: null, inventorySource: "demo", certFingerprint: null, certSerial: null, containers: [] };
+                serverPublicId: s.publicId,
+                enrolled: false,
+                state: "OFFLINE" as const,
+                lastHeartbeatAt: null,
+                lastHeartbeatAgeMs: null,
+                lastSuccessfulTelemetryAt: null,
+                telemetryAgeMs: null,
+                agentErrorCount: 0,
+                lastErrorClass: null,
+                gatewayState: null,
+                certNotAfter: null,
+                certDaysRemaining: null,
+                certExpiringSoon: false,
+                certExpired: false,
+                inventorySource: "demo",
+                containers: [] };
             return (
               <Card key={s.publicId} className="border-border/70 card-layer">
                   <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
@@ -241,18 +260,19 @@ function ConsoleInner() {
                             shown as live when an agent is actually reporting. */}
                         <Dot
                           tone={
-                            agentView?.online
+                            agentView?.state === "ONLINE"
                               ? "ok"
                               : agentView?.enrolled
                                 ? "warn"
                                 : "idle"
                           }
-                          pulse={agentView?.online}
+                          pulse={agentView?.state === "ONLINE"}
                         />
                         {s.displayName}
                         <LifecycleBadge state={s.lifecycleState} />
                       </span>
                       <AgentBadge view={agentView} />
+                      <AgentHealthLine view={agentView} />
                     </CardTitle>
                     <Link
                       to={`/console/servers/${s.publicId}`}

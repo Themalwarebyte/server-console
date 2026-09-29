@@ -1,4 +1,4 @@
-﻿import {
+import {
   Dot,
   LifecycleBadge,
   LogsDialog,
@@ -6,6 +6,7 @@
   Mono,
   RiskBadge,
 } from "@/components/console/ui";
+import { ago, useAgentViews } from "@/components/console/AgentStatus";
 import { ConsoleLayout } from "@/components/console/ConsoleLayout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,6 +67,13 @@ const CAP_LABELS: Record<string, { label: string; desc: string }> = {
 export default function ServerDetail() {
   const { publicId } = useParams<{ publicId: string }>();
   const server = useQuery(api.console.getServer, { publicId: publicId ?? "" });
+  // Agent health is a separate control-plane read: the server document does not
+  // carry derived state, and the health view deliberately omits certificate
+  // material, exposing only the expiry the UI needs for a warning.
+  const agentViews = useAgentViews();
+  const agentView = agentViews?.find(
+    (a) => a.serverPublicId === publicId,
+  );
   const containers = useQuery(api.console.listContainers, {
     serverPublicId: publicId ?? "",
   });
@@ -131,12 +139,25 @@ export default function ServerDetail() {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">{server.displayName}</h1>
             <LifecycleBadge state={server.lifecycleState} />
-            <Badge variant="outline" className="border-border bg-card text-[11px] text-muted-foreground">
-              {/* No agent is enrolled in V0.1 — this is a real state, not a
-                  missing measurement, so it is never shown as "connected". */}
-              <Dot tone={server.agent?.connected ? "ok" : "idle"} pulse={server.agent?.connected} />
+            <Badge
+              variant="outline"
+              className="border-border bg-card text-[11px] text-muted-foreground"
+            >
+              {/* Agent state is derived in the control plane from the heartbeat,
+                  telemetry freshness and error count. It is never inferred
+                  from the presence of a database row. */}
+              <Dot
+                tone={
+                  agentView?.state === "ONLINE"
+                    ? "ok"
+                    : agentView?.state === "DEGRADED"
+                      ? "warn"
+                      : "bad"
+                }
+                pulse={agentView?.state === "ONLINE"}
+              />
               <span className="ml-1.5">
-                agent {server.agent?.connected ? "connected" : "not enrolled"}
+                agent {agentView ? agentView.state.toLowerCase() : "not enrolled"}
               </span>
             </Badge>
             <Badge variant="outline" className="border-border bg-card text-[11px] text-muted-foreground">
@@ -227,12 +248,38 @@ export default function ServerDetail() {
                     : "Not observed",
                 ],
                 ["Source", server.inventorySource === "operator_snapshot" ? "Operator snapshot" : (server.inventorySource ?? "demo")],
-                // No agent is enrolled, so no mTLS material has ever been
-                // issued. Report that plainly instead of a placeholder.
-                ["Key fingerprint", server.identity?.fingerprint ?? "Not issued"],
-                ["Certificate serial", server.identity?.certSerial ?? "Not issued"],
-                ["Certificate expires", server.identity ? "Issued" : "Not issued"],
-                ["mTLS", server.identity ? "Configured" : "Not configured"],
+              // Certificate and mTLS facts come from the agent health view, which
+              // exposes only the expiry. No fingerprint or serial is rendered
+              // here: the UI has no need for certificate material and must not
+              // be given it.
+              [
+                "Certificate",
+                agentView?.certExpired
+                  ? "EXPIRED"
+                  : agentView?.certNotAfter
+                    ? agentView.certExpiringSoon
+                      ? `Expires in ${agentView.certDaysRemaining}d`
+                      : "Valid"
+                    : "Not recorded",
+              ],
+              [
+                "mTLS",
+                agentView?.gatewayState === "connected"
+                  ? "Connected"
+                  : agentView?.gatewayState
+                    ? "Configured, not connected"
+                    : "Not connected",
+              ],
+              ["Last heartbeat", ago(agentView?.lastHeartbeatAt)],
+              ["Last successful telemetry", ago(agentView?.lastSuccessfulTelemetryAt)],
+              [
+                "Last errors",
+                agentView && agentView.agentErrorCount > 0
+                  ? `${agentView.agentErrorCount} since last success${
+                      agentView.lastErrorClass ? ` (${agentView.lastErrorClass})` : ""
+                    }`
+                  : "None since last success",
+              ],
                 ["Tailscale", server.tailscaleName],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-baseline justify-between gap-4 border-b border-border/40 pb-2 last:border-0">

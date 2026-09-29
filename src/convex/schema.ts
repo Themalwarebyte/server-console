@@ -51,6 +51,20 @@ const schema = defineSchema(
       // Epoch ms of the most recent agent heartbeat. Liveness is derived from
       // this, never from the mere existence of a row.
       lastHeartbeatAt: v.optional(v.number()),
+      // Epoch ms of the last telemetry record the gateway actually ingested.
+      // Deliberately distinct from the heartbeat: a host can be reachable while
+      // its helper is failing, and that gap is what marks the host DEGRADED.
+      lastSuccessfulTelemetryAt: v.optional(v.number()),
+      // Errors observed since the last successful telemetry; reset on success.
+      agentErrorCount: v.optional(v.number()),
+      // Sanitised error CLASS only (helper_timeout, ingest_rejected). Never a
+      // raw message, path, or stack trace.
+      lastErrorClass: v.optional(v.string()),
+      // Gateway-side view of the agent stream: connected | disconnected.
+      gatewayState: v.optional(v.string()),
+      // Certificate expiry, recorded by the control plane at enrollment rather
+      // than reported by the agent, so surfacing it needs no protocol change.
+      certNotAfter: v.optional(v.number()),
       // not_enrolled | enrolled | revoked
       agentStatus: v.optional(v.string()),
       // Identity of the agent certificate this host last presented.
@@ -252,6 +266,22 @@ const schema = defineSchema(
         toState: v.optional(v.string()),
         fromHealth: v.optional(v.string()),
         toHealth: v.optional(v.string()),
+      }).index("by_server", ["serverPublicId"]),
+
+      /**
+       * Agent health events: gateway connect/disconnect and sanitised error
+       * classes. This is an operator audit trail, never a log sink — it holds
+       * metadata only, with no message bodies, paths, or stack traces.
+       */
+      agentHealthEvents: defineTable({
+        serverPublicId: v.string(),
+        at: v.number(),
+        // connect | disconnect | error
+        kind: v.string(),
+        // Sanitised class, e.g. ingest_rejected, helper_timeout, unknown_container
+        errorClass: v.optional(v.string()),
+        agentVersion: v.optional(v.string()),
+        protocolVersion: v.optional(v.string()),
       }).index("by_server", ["serverPublicId"]),
     },
   {

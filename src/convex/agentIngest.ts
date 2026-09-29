@@ -34,6 +34,43 @@ import type { DataModel, Doc } from "./_generated/dataModel";
 export const OFFLINE_AFTER_MS = 45_000;
 
 /**
+ * Telemetry staleness threshold.
+ *
+ * Host telemetry is expected every 5 s and Docker telemetry every 10 s, so a
+ * successful write older than this while the heartbeat is still fresh means
+ * something is broken upstream of Convex — the helper, the agent, or the
+ * gateway ingest. That is precisely the DEGRADED case.
+ */
+export const TELEMETRY_STALE_MS = 30_000;
+
+/** Warn when a certificate has fewer than this many days remaining. */
+export const CERT_WARN_DAYS = 30;
+
+/**
+ * Error classes the platform will store. Anything unrecognised collapses to
+ * `unknown`, so an unexpected upstream message can never reach the database
+ * and from there the UI.
+ */
+const ERROR_CLASSES = new Set([
+  "ingest_rejected",
+  "helper_unavailable",
+  "helper_timeout",
+  "unknown_container",
+  "identity_mismatch",
+  "gateway_unreachable",
+  "unknown",
+]);
+
+function sanitiseErrorClass(v: unknown): string {
+  const s = typeof v === "string" ? v : "";
+  return ERROR_CLASSES.has(s) ? s : "unknown";
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+/**
  * constantTimeEqual compares two credentials without leaking their contents
  * through timing. Implemented over UTF-8 bytes directly rather than via Buffer
  * so behaviour does not depend on which Buffer type the runtime exposes.
@@ -64,7 +101,15 @@ interface IngestEnvelope {
   payload: Record<string, unknown>;
 }
 
-const ALLOWED_KINDS: readonly string[] = ["host", "docker", "event"];
+const ALLOWED_KINDS: readonly string[] = [
+  "host",
+  "docker",
+  "event",
+  // Health signals from the gateway, carried on the same authenticated endpoint
+  // so no new channel, credential, or protocol surface is introduced.
+  "status",
+  "error",
+];
 
 /** Registers the narrow ingest endpoint on the shared HTTP router. */
 export function registerAgentRoutes(http: HttpRouter): void {
@@ -176,12 +221,57 @@ export const ingestAgentTelemetry = mutation({
 
     const now = Date.now();
 
+    // ---- health signals, handled before the telemetry write path ----
+    if (a.kind === "status") {
+      const connected = a.payload?.state === "connected";
+      // The gateway reports the leaf certificate's expiry. It is recorded as a
+      // date only, so the UI can warn about expiry without the control plane
+      // ever storing or exposing certificate material.
+      const na = a.payload?.certNotAfterMs;
+      const notAfter =
+        typeof na === "number" && Number.isFinite(na) && na > 0 ? na : undefined;
+      await ctx.db.patch(server._id, {
+        gatewayState: connected ? "connected" : "disconnected",
+        ...(notAfter ? { certNotAfter: notAfter } : {}),
+      });
+      await ctx.db.insert("agentHealthEvents", {
+        serverPublicId: a.serverPublicId,
+        at: now,
+        kind: connected ? "connect" : "disconnect",
+        agentVersion: str(a.payload?.agentVersion),
+        protocolVersion: str(a.payload?.protocolVersion),
+      });
+      return { stored: true, kind: "status" };
+    }
+
+    if (a.kind === "error") {
+      // Only a sanitised class is accepted. A raw message, path, or stack trace
+      // is discarded at the boundary rather than trusted and trimmed.
+      const cls = sanitiseErrorClass(a.payload?.errorClass);
+      await ctx.db.patch(server._id, {
+        agentErrorCount: (server.agentErrorCount ?? 0) + 1,
+        lastErrorClass: cls,
+      });
+      await ctx.db.insert("agentHealthEvents", {
+        serverPublicId: a.serverPublicId,
+        at: now,
+        kind: "error",
+        errorClass: cls,
+        agentVersion: str(a.payload?.agentVersion),
+        protocolVersion: str(a.payload?.protocolVersion),
+      });
+      return { stored: true, kind: "error" };
+    }
+
+    // ---- telemetry: a successful write clears the current error streak ----
     // Liveness. A host is never presented as active merely because a row exists.
     await ctx.db.patch(server._id, {
       inventorySource: "agent",
       agentStatus: "enrolled",
       lastHeartbeatAt: now,
       lastObservedAt: a.observedAtMs || now,
+      lastSuccessfulTelemetryAt: now,
+      agentErrorCount: 0,
       certFingerprint: a.certFingerprint,
       certSerial: a.certSerial,
     });
@@ -201,7 +291,24 @@ export const ingestAgentTelemetry = mutation({
   },
 });
 
-/** Fleet view. Requires the Owner, like every other sensitive read. */
+/**
+ * Fleet view with derived agent health.
+ *
+ * Three states, and the distinction between them is the whole point:
+ *
+ *   OFFLINE   — no heartbeat inside the offline threshold. The host is not
+ *               talking to the gateway at all.
+ *   DEGRADED  — the heartbeat is fresh, so the host IS talking, but telemetry
+ *               is stale or errors have been recorded. Something between the
+ *               host and Convex is failing: the helper, the agent, or ingest.
+ *   ONLINE    — heartbeat fresh AND telemetry flowing.
+ *
+ * A host is never reported healthy merely because a row exists.
+ *
+ * Security: this view deliberately omits the certificate fingerprint and
+ * serial. Only the expiry is exposed, so the UI can warn without ever
+ * receiving certificate material. Error detail is limited to a class.
+ */
 export const listAgentStatus = query({
   args: {},
   handler: async (ctx) => {
@@ -210,21 +317,58 @@ export const listAgentStatus = query({
     const now = Date.now();
 
     return servers.map((s) => {
-      const last = s.lastHeartbeatAt ?? 0;
-      const online = last > 0 && now - last <= OFFLINE_AFTER_MS;
+      const enrolled = s.agentStatus === "enrolled";
+      const hb = s.lastHeartbeatAt ?? 0;
+      const hbAge = hb > 0 ? now - hb : null;
+      const tel = s.lastSuccessfulTelemetryAt ?? 0;
+      const telAge = tel > 0 ? now - tel : null;
+      const gatewayState = s.gatewayState ?? null;
+      const errCount = s.agentErrorCount ?? 0;
+
+      let state: "ONLINE" | "DEGRADED" | "OFFLINE";
+      if (!enrolled) {
+        state = "OFFLINE";
+      } else if (hbAge === null || hbAge > OFFLINE_AFTER_MS) {
+        state = "OFFLINE";
+      } else if (
+        gatewayState === "disconnected" ||
+        telAge === null ||
+        telAge > TELEMETRY_STALE_MS ||
+        errCount > 0
+      ) {
+        state = "DEGRADED";
+      } else {
+        state = "ONLINE";
+      }
+
+      const certNotAfter = s.certNotAfter ?? null;
+      const certDays = certNotAfter
+        ? Math.floor((certNotAfter - now) / 86_400_000)
+        : null;
+      const certExpired = certNotAfter !== null && certNotAfter <= now;
+
       return {
         serverPublicId: s.publicId,
         displayName: s.displayName,
         hostname: s.hostname,
-        enrolled: s.agentStatus === "enrolled",
-        online,
-        lastHeartbeatAt: last || null,
-        lastObservedAt: s.lastObservedAt ?? null,
-        // Live figures are only meaningful while the agent is online. For an
-        // offline host the caller must label any figure as stale.
+        enrolled,
+        state,
+        lastHeartbeatAt: hb || null,
+        lastHeartbeatAgeMs: hbAge,
+        lastSuccessfulTelemetryAt: tel || null,
+        telemetryAgeMs: telAge,
+        agentErrorCount: errCount,
+        lastErrorClass: s.lastErrorClass ?? null,
+        gatewayState,
+        certNotAfter,
+        certDaysRemaining: certDays,
+        certExpiringSoon:
+          certDays !== null && !certExpired && certDays <= CERT_WARN_DAYS,
+        certExpired,
+        // Live figures are only meaningful while the agent is actually
+        // reporting. For an OFFLINE or DEGRADED host the caller must label any
+        // figure as stale rather than current.
         inventorySource: s.inventorySource ?? "demo",
-        certFingerprint: s.certFingerprint ?? null,
-        certSerial: s.certSerial ?? null,
       };
     });
   },
@@ -260,6 +404,59 @@ export const listAgentEvents = query({
     const n = Math.min(a.limit ?? 20, 100);
     return ctx.db
       .query("agentEvents")
+      .withIndex("by_server", (q) => q.eq("serverPublicId", a.serverPublicId))
+      .order("desc")
+      .take(n);
+  },
+});
+
+/**
+ * Records the expiry of an agent certificate.
+ *
+ * Expiry is a property of the certificate the control plane issued, so it is
+ * recorded here rather than reported by the agent. That keeps the warning
+ * feature free of any change to the agent, the helper, or the gateway protocol.
+ *
+ * Requires the Owner. Only an epoch is accepted; no certificate material is
+ * stored, and none is ever returned to the UI.
+ */
+export const recordCertificateExpiry = mutation({
+  args: {
+    serverPublicId: v.string(),
+    notAfterMs: v.number(),
+  },
+  handler: async (ctx, a) => {
+    await requireOwner(ctx);
+    if (!Number.isFinite(a.notAfterMs) || a.notAfterMs <= 0) {
+      throw new Error("notAfterMs must be a positive epoch in milliseconds");
+    }
+    const server = await ctx.db
+      .query("servers")
+      .withIndex("by_public_id", (q) => q.eq("publicId", a.serverPublicId))
+      .first();
+    if (!server) throw new Error("unknown server");
+    await ctx.db.patch(server._id, { certNotAfter: a.notAfterMs });
+    await ctx.db.insert("agentHealthEvents", {
+      serverPublicId: a.serverPublicId,
+      at: Date.now(),
+      kind: "cert_recorded",
+    });
+    return { recorded: true, serverPublicId: a.serverPublicId };
+  },
+});
+
+/**
+ * Recent agent health events, for the server detail page.
+ *
+ * Sanitised by construction: only a class, never a message. Requires the Owner.
+ */
+export const listHealthEvents = query({
+  args: { serverPublicId: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, a) => {
+    await requireOwner(ctx);
+    const n = Math.min(a.limit ?? 20, 50);
+    return ctx.db
+      .query("agentHealthEvents")
       .withIndex("by_server", (q) => q.eq("serverPublicId", a.serverPublicId))
       .order("desc")
       .take(n);
